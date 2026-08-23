@@ -1,0 +1,64 @@
+{
+  "name": "alpha-desktop",
+  "version": "2.0.0",
+  "description": "Alpha — AI work, coordinated. Desktop application.",
+  "main": "main.js",
+  "author": "Alpha",
+  "license": "UNLICENSED",
+  "private": true,
+  "scripts": {
+    "prepare:build": "node scripts/prepare.mjs",
+    "start": "npm run prepare:build && electron .",
+    "dist": "npm run prepare:build && electron-builder --win",
+    "dist:portable": "npm run prepare:build && electron-builder --win portable"
+  },
+  "devDependencies": {
+    "electron": "^33.2.0",
+    "electron-builder": "^25.1.8"
+  },
+  "dependencies": {
+    "better-sqlite3": "^11.8.1",
+    "cors": "^2.8.5",
+    "cross-spawn": "^7.0.6",
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2",
+    "p-queue": "^8.1.0",
+    "split2": "^4.2.0",
+    "tree-kill": "^1.2.2",
+    "ws": "^8.18.0",
+    "zod": "^3.24.2"
+  },
+  "build": {
+    "appId": "com.alpha.desktop",
+    "productName": "Alpha",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "build/**/*",
+      "!**/*.map"
+    ],
+    "asar": true,
+    "asarUnpack": [
+      "**/node_modules/better-sqlite3/**"
+    ],
+    "win": {
+      "target": [
+        { "target": "nsis", "arch": ["x64"] },
+        { "target": "portable", "arch": ["x64"] }
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "shortcutName": "Alpha",
+      "artifactName": "Alpha-Setup-${version}.${ext}"
+    },
+    "portable": {
+      "artifactName": "Alpha-Portable-${version}.${ext}"
+    }
+  }
+}
