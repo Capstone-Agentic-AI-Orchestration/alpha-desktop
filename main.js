@@ -113,10 +113,42 @@ function createWindow() {
 
   mainWindow.once('ready-to-show', () => mainWindow.show());
 
-  // External links open in the real browser, never inside the app frame.
+  /**
+   * External links open in the real browser, never inside the app frame — and
+   * only if they are actually web links.
+   *
+   * The scheme check is load-bearing, not defensive habit. This window renders
+   * model-generated text and tool output, so a URL here can originate from an
+   * LLM, a repo README, or a webhook payload. `shell.openExternal` hands the
+   * string to the OS: on Windows a `file://` URL can launch a local
+   * executable, and custom schemes reach whatever app claims them. Allowlist
+   * http/https and drop everything else.
+   */
+  const openIfWebUrl = url => {
+    try {
+      const { protocol } = new URL(url);
+      if (protocol === 'https:' || protocol === 'http:') {
+        shell.openExternal(url);
+        return;
+      }
+      console.warn(`Blocked external open of non-web URL: ${protocol}`);
+    } catch {
+      console.warn('Blocked external open of unparseable URL');
+    }
+  };
+
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
-    shell.openExternal(url);
+    openIfWebUrl(url);
     return { action: 'deny' };
+  });
+
+  // Same rule for top-frame navigation. Without this, a link that replaces the
+  // window (rather than opening a new one) bypasses the handler above and could
+  // navigate the app frame away from the packaged renderer.
+  mainWindow.webContents.on('will-navigate', (event, url) => {
+    if (url === mainWindow.webContents.getURL()) return;
+    event.preventDefault();
+    openIfWebUrl(url);
   });
 
   mainWindow.loadFile(path.join(__dirname, 'build', 'renderer', 'index.html'));
