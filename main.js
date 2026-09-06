@@ -91,6 +91,98 @@ function waitForBackend(timeoutMs = 20000) {
   });
 }
 
+/**
+ * Keeping everyone on the same build.
+ *
+ * Alpha is distributed as an installer, so an update meant telling five people
+ * a new one existed and hoping they ran it. Over a semester that is how a team
+ * ends up debugging behaviour that was fixed three versions ago on one laptop
+ * and not the others.
+ *
+ * ## The private-repository problem, and why gh solves it
+ *
+ * `alpha-desktop` is private, so downloading a release needs a token —
+ * ordinarily a second credential for every person to obtain and configure,
+ * which is exactly the friction automatic updates exist to remove.
+ *
+ * But every Alpha user has already run `gh auth login`; that is how the board
+ * and their role work at all. `gh auth token` prints that token, so the update
+ * check borrows the authentication they already have. Nothing new to set up,
+ * no secret in the package, and someone without access to the repository
+ * simply gets no updates rather than an error they cannot act on.
+ *
+ * The token is held in memory for the request and never written anywhere.
+ */
+function githubToken() {
+  try {
+    const { execFileSync } = require('node:child_process');
+    const token = execFileSync('gh', ['auth', 'token'], {
+      encoding: 'utf8',
+      timeout: 10000,
+      stdio: ['ignore', 'pipe', 'ignore']
+    }).trim();
+    return token || null;
+  } catch {
+    // No gh, not signed in, or no access. All mean "no updates", not "broken".
+    return null;
+  }
+}
+
+function startUpdateChecks(window) {
+  // Never in development: electron-updater has no packaged app to compare
+  // against and logs a confusing error every few hours.
+  if (!app.isPackaged) return;
+
+  let autoUpdater;
+  try {
+    ({ autoUpdater } = require('electron-updater'));
+  } catch {
+    return;
+  }
+
+  const token = githubToken();
+  if (!token) {
+    console.log('Update check skipped: no GitHub token available from gh.');
+    return;
+  }
+  process.env.GH_TOKEN = token;
+
+  /**
+   * Download automatically, install when the user is ready.
+   *
+   * Alpha spawns agent CLIs that write to a git checkout — restarting under one
+   * would leave a half-finished run and a branch nobody expected. So the
+   * download is silent and the restart is always the person's choice.
+   */
+  autoUpdater.autoDownload = true;
+  autoUpdater.autoInstallOnAppQuit = true;
+
+  autoUpdater.on('update-downloaded', async (info) => {
+    const { response } = await dialog.showMessageBox(window, {
+      type: 'info',
+      buttons: ['Restart now', 'Later'],
+      defaultId: 0,
+      cancelId: 1,
+      title: 'Alpha update ready',
+      message: `Alpha ${info.version} is ready to install.`,
+      detail:
+        'It will install when you next quit, or you can restart now. ' +
+        'Your board, agents and history are unaffected — the database is migrated in place.'
+    });
+    if (response === 0) autoUpdater.quitAndInstall();
+  });
+
+  autoUpdater.on('error', (err) => {
+    // A failed check is not worth a dialog: the app works, it is just not the
+    // newest. Logged so it is diagnosable, silent so it is not annoying.
+    console.error('Update check failed:', err?.message || err);
+  });
+
+  autoUpdater.checkForUpdates().catch(() => {});
+  // Every six hours, for the machine that stays open all week.
+  setInterval(() => autoUpdater.checkForUpdates().catch(() => {}), 6 * 60 * 60 * 1000);
+}
+
 function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1440,
@@ -170,6 +262,9 @@ app.whenReady().then(async () => {
   }
 
   createWindow();
+
+  // After the window exists, so an update dialog has a parent to attach to.
+  startUpdateChecks(mainWindow);
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();

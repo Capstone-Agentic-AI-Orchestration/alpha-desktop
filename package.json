@@ -1,7 +1,7 @@
 {
   "name": "alpha-desktop",
   "version": "2.0.0",
-  "description": "Alpha — AI work, coordinated. Desktop application.",
+  "description": "Alpha â€” AI work, coordinated. Desktop application.",
   "main": "main.js",
   "author": "Alpha",
   "license": "UNLICENSED",
@@ -17,10 +17,12 @@
     "electron-builder": "^25.1.8"
   },
   "dependencies": {
+    "@supabase/supabase-js": "^2.112.3",
     "better-sqlite3": "^11.8.1",
     "cors": "^2.8.5",
     "cross-spawn": "^7.0.6",
     "dotenv": "^16.4.7",
+    "electron-updater": "^6.8.9",
     "express": "^4.21.2",
     "p-queue": "^8.1.0",
     "split2": "^4.2.0",
@@ -46,8 +48,18 @@
     ],
     "win": {
       "target": [
-        { "target": "nsis", "arch": ["x64"] },
-        { "target": "portable", "arch": ["x64"] }
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        }
       ]
     },
     "nsis": {
@@ -59,6 +71,13 @@
     },
     "portable": {
       "artifactName": "Alpha-Portable-${version}.${ext}"
+    },
+    "publish": {
+      "provider": "github",
+      "owner": "Capstone-Agentic-AI-Orchestration",
+      "repo": "alpha-desktop",
+      "private": true,
+      "releaseType": "release"
     }
   }
 }
