@@ -1,6 +1,7 @@
 'use strict';
 
 const electron = require('electron');
+const fs = require('node:fs');
 const path = require('node:path');
 const http = require('node:http');
 
@@ -37,26 +38,49 @@ const { app, BrowserWindow, dialog, shell } = electron;
  * is the same "main process IS the daemon" arrangement the plan describes —
  * one process, one lifecycle, nothing to orphan on quit.
  *
- * The renderer is the Vite build loaded from disk. It still talks to
- * http://127.0.0.1:3001 exactly as it does in development, so no frontend code
- * changes between `npm run dev` and the packaged app.
+ * The renderer is the Vite build loaded from disk. It talks to the loopback
+ * daemon over HTTP exactly as it does in development -- the address is compiled
+ * in by `prepare.mjs` from `desktop-address.cjs` -- so no frontend code changes
+ * between `npm run dev` and the packaged app.
  */
 
-const PORT = Number(process.env.PORT || 3001);
-const HOST = '127.0.0.1';
+const { HOST, PORT } = require('./desktop-address.cjs');
 
 let mainWindow = null;
 
+/**
+ * Deployment settings, baked in when the app was built.
+ *
+ * An installed app has no `.env`, and the daemon now refuses to start without
+ * settings such as ALPHA_ORG rather than falling back to one organisation
+ * written into the code. `scripts/prepare.mjs` writes this file from the
+ * build's environment, restricted to public values; see PUBLIC_SETTINGS there.
+ *
+ * The environment still wins, so a developer can point one install elsewhere
+ * without rebuilding it.
+ */
+function loadBuildConfig() {
+  const file = path.join(__dirname, 'build', 'app-config.json');
+  let values;
+  try {
+    values = JSON.parse(fs.readFileSync(file, 'utf8'));
+  } catch {
+    // Nothing baked in. The daemon's own startup checks name what is missing.
+    return;
+  }
+  for (const [key, value] of Object.entries(values)) {
+    if (process.env[key] === undefined && typeof value === 'string') process.env[key] = value;
+  }
+}
+
 function startBackend() {
+  loadBuildConfig();
+
   // Bind loopback and allow the file:// renderer through CORS. Both are set
   // before the server module is required, because it reads them at import time.
   process.env.HOST = HOST;
   process.env.PORT = String(PORT);
-  process.env.CORS_ORIGIN = [
-    'file://',
-    `http://${HOST}:${PORT}`,
-    'http://localhost:3000'
-  ].join(',');
+  process.env.CORS_ORIGIN = ['file://', `http://${HOST}:${PORT}`].join(',');
 
   require(path.join(__dirname, 'build', 'server', 'index.js'));
 }

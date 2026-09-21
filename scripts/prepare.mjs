@@ -7,9 +7,11 @@
  * frontend build stops the packaging run instead of shipping a stale renderer.
  */
 import { execSync } from 'node:child_process';
+import { createRequire } from 'node:module';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import dotenv from 'dotenv';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const desktop = path.resolve(here, '..');
@@ -19,10 +21,25 @@ const FE = path.join(root, 'alpha-fe-main');
 const BE = path.join(root, 'alpha-be-main');
 const OUT = path.join(desktop, 'build');
 
-const run = (cmd, cwd) => {
+// The daemon address main.js binds, so the renderer is compiled to call it.
+const { apiUrl, wsUrl } = createRequire(import.meta.url)('../desktop-address.cjs');
+
+const run = (cmd, cwd, env = {}) => {
   console.log(`\n> ${cmd}   (${path.basename(cwd)})`);
-  execSync(cmd, { cwd, stdio: 'inherit' });
+  execSync(cmd, { cwd, stdio: 'inherit', env: { ...process.env, ...env } });
 };
+
+/**
+ * Deployment settings the installed app needs, and the only ones it may carry.
+ *
+ * An installer has no `.env`, and the daemon has no defaults for these any
+ * more, so they are written into `build/app-config.json` at build time. An
+ * allowlist rather than "everything in .env": this file ships inside the
+ * installer, where anyone can read it, so it may only hold values that are
+ * public already. SUPABASE_JWT_SECRET, GitHub secrets and private keys must
+ * never be added here.
+ */
+const PUBLIC_SETTINGS = ['ALPHA_ORG', 'ALPHA_CLOUD_API', 'SUPABASE_URL', 'SUPABASE_ANON_KEY'];
 
 const copyDir = (from, to) => {
   fs.rmSync(to, { recursive: true, force: true });
@@ -70,8 +87,11 @@ if (skewed.length) {
   console.warn(`\nWarning — dependency versions differ from the backend:\n${skewed.join('\n')}`);
 }
 
-// 2. Frontend — must be built with base './' so assets resolve under file://
-run('npm run build', FE);
+// 2. Frontend — must be built with base './' so assets resolve under file://.
+//    Pointed at this desktop's own daemon. The environment outranks the
+//    frontend's .env files in Vite, so a web-oriented .env.local cannot leak
+//    a hosted address into the desktop renderer.
+run('npm run build', FE, { VITE_API_URL: apiUrl, VITE_WS_URL: wsUrl });
 const feDist = path.join(FE, 'dist');
 if (!fs.existsSync(path.join(feDist, 'index.html'))) {
   throw new Error('Frontend build produced no index.html');
@@ -96,3 +116,26 @@ const count = dir =>
 
 console.log(`\nstaged renderer: ${count(path.join(OUT, 'renderer'))} files`);
 console.log(`staged server:   ${count(path.join(OUT, 'server'))} files`);
+
+// 5. Deployment settings, from the build's environment, falling back to the
+//    builder's own backend .env for a local `npm start`.
+const localEnvFile = path.join(BE, '.env');
+const localEnv = fs.existsSync(localEnvFile) ? dotenv.parse(fs.readFileSync(localEnvFile)) : {};
+
+const appConfig = {};
+for (const key of PUBLIC_SETTINGS) {
+  const value = process.env[key] || localEnv[key];
+  if (value) appConfig[key] = value;
+}
+
+if (!appConfig.ALPHA_ORG) {
+  throw new Error(
+    'ALPHA_ORG is not set, and the app would refuse to start without it. Set it ' +
+      'in the build environment, or in alpha-be-main/.env for a local build.'
+  );
+}
+
+fs.writeFileSync(path.join(OUT, 'app-config.json'), JSON.stringify(appConfig, null, 2) + '\n');
+const unset = PUBLIC_SETTINGS.filter(key => !appConfig[key]);
+console.log(`baked settings:  ${Object.keys(appConfig).join(', ')}`);
+if (unset.length) console.log(`not set:         ${unset.join(', ')} (the app runs without cloud sync)`);
