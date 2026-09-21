@@ -73,8 +73,29 @@ function loadBuildConfig() {
   }
 }
 
+/**
+ * The GitHub CLI this installer carries, as a fallback.
+ *
+ * Every GitHub call the daemon makes -- identity, teams, the board, pushes --
+ * spawns `gh`, and a teammate who installed only Alpha did not have it.
+ * `prepare.mjs` bundles a pinned, checksum-verified copy into resources/gh.
+ *
+ * Appended to PATH, not prepended: a `gh` the developer installed themselves,
+ * possibly newer, still answers first. Both keep the sign-in in the OS
+ * keyring, so it does not matter which one runs.
+ */
+function addBundledGhToPath() {
+  const dir = app.isPackaged
+    ? path.join(process.resourcesPath, 'gh')
+    : path.join(__dirname, 'vendor', 'gh');
+  if (fs.existsSync(path.join(dir, 'gh.exe'))) {
+    process.env.PATH = `${process.env.PATH || ''}${path.delimiter}${dir}`;
+  }
+}
+
 function startBackend() {
   loadBuildConfig();
+  addBundledGhToPath();
 
   // Bind loopback and allow the file:// renderer through CORS. Both are set
   // before the server module is required, because it reads them at import time.
