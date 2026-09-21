@@ -6,6 +6,10 @@ node_modules/
 # and go stale the moment either one changes.
 build/
 
+# Third-party binaries fetched and checksum-verified by prepare.mjs (the
+# GitHub CLI). Pinned in package.json under alphaVendor, never committed.
+vendor/
+
 # Packaged installers. ~450MB per build, and individual .exe files exceed
 # GitHub's 100MB hard limit. Publish these as release assets, never as commits.
 release/

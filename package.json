@@ -1,7 +1,7 @@
 {
   "name": "alpha-desktop",
   "version": "2.0.0",
-  "description": "Alpha â€” AI work, coordinated. Desktop application.",
+  "description": "Alpha — AI work, coordinated. Desktop application.",
   "main": "main.js",
   "author": "Alpha",
   "license": "UNLICENSED",
@@ -30,6 +30,12 @@
     "ws": "^8.18.0",
     "zod": "^3.24.2"
   },
+  "alphaVendor": {
+    "gh": {
+      "version": "2.101.0",
+      "sha256": "bc6c814367b193cd8e713611d61e36013c0ef843b8f516458fe3eda039192794"
+    }
+  },
   "build": {
     "appId": "com.alpha.desktop",
     "productName": "Alpha",
@@ -46,6 +52,12 @@
     "asar": true,
     "asarUnpack": [
       "**/node_modules/better-sqlite3/**"
+    ],
+    "extraResources": [
+      {
+        "from": "vendor/gh",
+        "to": "gh"
+      }
     ],
     "win": {
       "target": [

@@ -6,9 +6,11 @@
  * this as an explicit step (rather than a postinstall hook) means a failed
  * frontend build stops the packaging run instead of shipping a stale renderer.
  */
-import { execSync } from 'node:child_process';
+import { execFileSync, execSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { createRequire } from 'node:module';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import dotenv from 'dotenv';
@@ -139,3 +141,88 @@ fs.writeFileSync(path.join(OUT, 'app-config.json'), JSON.stringify(appConfig, nu
 const unset = PUBLIC_SETTINGS.filter(key => !appConfig[key]);
 console.log(`baked settings:  ${Object.keys(appConfig).join(', ')}`);
 if (unset.length) console.log(`not set:         ${unset.join(', ')} (the app runs without cloud sync)`);
+
+/**
+ * 6. The GitHub CLI, bundled.
+ *
+ * Identity, teams, the board and every push go through `gh`, and a teammate
+ * who installed only Alpha did not have it -- so their first screen was a
+ * terminal command to install a tool. The installer now carries it
+ * (`extraResources` -> resources/gh) and main.js adds it to PATH.
+ *
+ * Pinned in package.json (`alphaVendor.gh`) by version AND sha256, and checked
+ * before anything is extracted: a binary shipped to every developer's machine
+ * must be exactly the one that was reviewed, not whatever the URL serves on
+ * build day. Cached in vendor/ so only a version bump downloads again.
+ *
+ * gh is MIT-licensed; redistributing it means shipping its licence too.
+ */
+const { gh: ghPin } = JSON.parse(fs.readFileSync(path.join(desktop, 'package.json'), 'utf8')).alphaVendor ?? {};
+if (!ghPin?.version || !ghPin?.sha256) {
+  throw new Error('package.json alphaVendor.gh must pin both "version" and "sha256".');
+}
+
+const GH_DIR = path.join(desktop, 'vendor', 'gh');
+const ghStamp = path.join(GH_DIR, 'VERSION');
+const ghCached =
+  fs.existsSync(path.join(GH_DIR, 'gh.exe')) &&
+  fs.existsSync(ghStamp) &&
+  fs.readFileSync(ghStamp, 'utf8').trim() === ghPin.version;
+
+if (ghCached) {
+  console.log(`bundled gh:      ${ghPin.version} (cached)`);
+} else {
+  const zipName = `gh_${ghPin.version}_windows_amd64.zip`;
+  const url = `https://github.com/cli/cli/releases/download/v${ghPin.version}/${zipName}`;
+  console.log(`\n> fetching ${url}`);
+
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`Could not download gh ${ghPin.version}: HTTP ${res.status}`);
+  const zip = Buffer.from(await res.arrayBuffer());
+
+  const actual = createHash('sha256').update(zip).digest('hex');
+  if (actual !== ghPin.sha256) {
+    throw new Error(
+      `gh ${ghPin.version} failed its checksum: expected ${ghPin.sha256}, got ${actual}. ` +
+        'Refusing to bundle it.'
+    );
+  }
+
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'alpha-gh-'));
+  try {
+    const zipPath = path.join(tmp, zipName);
+    fs.writeFileSync(zipPath, zip);
+    // Windows 10+ ships bsdtar, which reads zip archives; no extra dependency.
+    // By absolute path, so a `tar` earlier on PATH cannot stand in for it
+    // while this handles a downloaded archive.
+    const systemTar = process.env.SystemRoot
+      ? path.join(process.env.SystemRoot, 'System32', 'tar.exe')
+      : 'tar';
+    execFileSync(systemTar, ['-xf', zipPath, '-C', tmp]);
+
+    const find = (dir, name) => {
+      for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+        const full = path.join(dir, entry.name);
+        if (entry.isFile() && entry.name.toLowerCase() === name) return full;
+        if (entry.isDirectory()) {
+          const hit = find(full, name);
+          if (hit) return hit;
+        }
+      }
+      return undefined;
+    };
+
+    const ghExe = find(tmp, 'gh.exe');
+    const license = find(tmp, 'license');
+    if (!ghExe) throw new Error(`gh ${ghPin.version} archive contained no gh.exe`);
+
+    fs.rmSync(GH_DIR, { recursive: true, force: true });
+    fs.mkdirSync(GH_DIR, { recursive: true });
+    fs.copyFileSync(ghExe, path.join(GH_DIR, 'gh.exe'));
+    if (license) fs.copyFileSync(license, path.join(GH_DIR, 'LICENSE'));
+    fs.writeFileSync(ghStamp, `${ghPin.version}\n`);
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+  console.log(`bundled gh:      ${ghPin.version} (sha256 verified)`);
+}
