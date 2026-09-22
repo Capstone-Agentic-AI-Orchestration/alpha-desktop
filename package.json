@@ -1,7 +1,7 @@
 {
   "name": "alpha-desktop",
   "version": "2.0.2",
-  "description": "Alpha \u2014 AI work, coordinated. Desktop application.",
+  "description": "Alpha — AI work, coordinated. Desktop application.",
   "main": "main.js",
   "author": "Alpha",
   "license": "UNLICENSED",
@@ -23,6 +23,7 @@
     "cors": "^2.8.5",
     "cross-spawn": "^7.0.6",
     "dotenv": "^16.4.7",
+    "electron-log": "^5.4.4",
     "electron-updater": "^6.8.9",
     "express": "^4.21.2",
     "p-queue": "^8.1.0",

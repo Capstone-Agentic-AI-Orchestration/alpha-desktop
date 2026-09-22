@@ -1,6 +1,6 @@
 'use strict';
 
-const { contextBridge } = require('electron');
+const { contextBridge, ipcRenderer } = require('electron');
 
 /**
  * Deliberately minimal.
@@ -19,5 +19,14 @@ contextBridge.exposeInMainWorld('alphaDesktop', {
     electron: process.versions.electron,
     node: process.versions.node,
     chrome: process.versions.chrome
-  }
+  },
+  /**
+   * One of the capabilities this file was always going to grow for.
+   *
+   * It takes no arguments and returns only what happened, so the renderer can
+   * ask for a check and cannot direct one: it names no repository, no version
+   * and no URL. Main decides all of that from what was baked into the build.
+   */
+  checkForUpdates: () => ipcRenderer.invoke('alpha:check-for-updates'),
+  appVersion: () => ipcRenderer.invoke('alpha:app-version')
 });

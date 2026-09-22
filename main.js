@@ -27,7 +27,7 @@ if (!electron || typeof electron === 'string' || !electron.app) {
   process.exit(1);
 }
 
-const { app, BrowserWindow, dialog, shell } = electron;
+const { app, BrowserWindow, dialog, ipcMain, shell } = electron;
 
 /**
  * Alpha desktop shell.
@@ -173,6 +173,15 @@ function githubToken() {
   }
 }
 
+/**
+ * The updater once it is set up, so a manual check can reach it.
+ *
+ * Null in development and when `gh` has no token. Both mean there is nothing
+ * to check with, and the answer to a manual check should say which rather than
+ * appearing to work.
+ */
+let updater = null;
+
 function startUpdateChecks(window) {
   // Never in development: electron-updater has no packaged app to compare
   // against and logs a confusing error every few hours.
@@ -185,9 +194,22 @@ function startUpdateChecks(window) {
     return;
   }
 
+  /**
+   * Every check, download and failure, on disk.
+   *
+   * A packaged Windows app has no console, so the handlers below logged into
+   * nothing: an update that never arrived looked exactly like one that failed,
+   * with no record either way. electron-log writes to the user's log directory,
+   * which is then the first place to look when someone says they did not get a
+   * release.
+   */
+  const log = require('electron-log');
+  log.transports.file.level = 'info';
+  autoUpdater.logger = log;
+
   const token = githubToken();
   if (!token) {
-    console.log('Update check skipped: no GitHub token available from gh.');
+    log.info('Update check skipped: no GitHub token available from gh.');
     return;
   }
   process.env.GH_TOKEN = token;
@@ -220,13 +242,54 @@ function startUpdateChecks(window) {
   autoUpdater.on('error', (err) => {
     // A failed check is not worth a dialog: the app works, it is just not the
     // newest. Logged so it is diagnosable, silent so it is not annoying.
-    console.error('Update check failed:', err?.message || err);
+    log.error('Update check failed:', err?.message || err);
   });
 
+  updater = autoUpdater;
   autoUpdater.checkForUpdates().catch(() => {});
   // Every six hours, for the machine that stays open all week.
   setInterval(() => autoUpdater.checkForUpdates().catch(() => {}), 6 * 60 * 60 * 1000);
 }
+
+/**
+ * A check the person can ask for, rather than one they wait for.
+ *
+ * The automatic check runs on launch and then every six hours, so someone who
+ * knows a release exists -- because they just published it, or a teammate told
+ * them -- had no way to say "get it now" short of restarting the app. Six hours
+ * is a long time to stare at a version number.
+ *
+ * Answers what happened rather than starting a download and going quiet: the
+ * dialog that offers the restart still comes from `update-downloaded`, since a
+ * download begun here finishes the same way as one begun on the schedule.
+ */
+/**
+ * Which version this is, for a UI that wants to say so.
+ *
+ * The renderer cannot read package.json: it is served over HTTP from the
+ * daemon in both builds, and in the packaged app that file is inside the asar.
+ * Settings displayed a hard-coded "2.0.0" instead, which was wrong the moment
+ * 2.0.1 shipped and would have stayed wrong forever.
+ */
+ipcMain.handle('alpha:app-version', () => app.getVersion());
+
+ipcMain.handle('alpha:check-for-updates', async () => {
+  if (!app.isPackaged) {
+    return { status: 'unsupported', reason: 'Updates apply to the installed app, not one run from source.' };
+  }
+  if (!updater) {
+    return { status: 'unsupported', reason: 'Alpha needs a GitHub sign-in to read its own releases. Run `gh auth login`.' };
+  }
+  try {
+    const result = await updater.checkForUpdates();
+    const available = result?.updateInfo?.version;
+    return available && available !== app.getVersion()
+      ? { status: 'downloading', version: available }
+      : { status: 'current', version: app.getVersion() };
+  } catch (err) {
+    return { status: 'error', message: err?.message ? String(err.message) : String(err) };
+  }
+});
 
 function createWindow() {
   mainWindow = new BrowserWindow({
