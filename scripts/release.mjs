@@ -19,6 +19,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { publishReleaseNotes } from './releaseNotes.mjs';
+
 const here = path.dirname(fileURLToPath(import.meta.url));
 const desktop = path.resolve(here, '..');
 const pkg = JSON.parse(fs.readFileSync(path.join(desktop, 'package.json'), 'utf8'));
@@ -97,3 +99,12 @@ execSync('npm run prepare:build && npx electron-builder --win --publish always',
 say(`\nPublished ${tag}.`);
 say('Installed copies will offer it on their next check (on launch, and every six hours).');
 say(`Release page: https://github.com/${repo}/releases/tag/${tag}`);
+
+try {
+  const count = await publishReleaseNotes({ desktop, version: pkg.version, tag, repo, token });
+  say(`Release notes written, with ${count} checksum(s).`);
+} catch (err) {
+  // The release is published and working by now; notes are not worth failing
+  // it over, and the reason is more useful than a stack trace.
+  say(`The release is published, but its notes could not be written: ${err.message}`);
+}
