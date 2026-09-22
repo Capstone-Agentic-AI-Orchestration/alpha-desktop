@@ -97,6 +97,17 @@ function startBackend() {
   loadBuildConfig();
   addBundledGhToPath();
 
+  /**
+   * Tell the daemon it is an installed app rather than a checkout.
+   *
+   * It decides one thing with this: whether the machine's `gh` login may stand
+   * in for a sign-in Alpha has not got. From source it may -- a developer has
+   * `gh` set up and should not complete a device flow to run what they are
+   * editing. Installed it must not, or the app opens straight onto the board as
+   * whoever the terminal was signed in as, having asked nobody.
+   */
+  if (app.isPackaged) process.env.ALPHA_PACKAGED = '1';
+
   // Bind loopback and allow the file:// renderer through CORS. Both are set
   // before the server module is required, because it reads them at import time.
   process.env.HOST = HOST;
