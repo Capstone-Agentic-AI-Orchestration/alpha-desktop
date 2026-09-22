@@ -1,7 +1,7 @@
 {
   "name": "alpha-desktop",
   "version": "2.0.0",
-  "description": "Alpha — AI work, coordinated. Desktop application.",
+  "description": "Alpha \u2014 AI work, coordinated. Desktop application.",
   "main": "main.js",
   "author": "Alpha",
   "license": "UNLICENSED",
@@ -10,7 +10,8 @@
     "prepare:build": "node scripts/prepare.mjs",
     "start": "npm run prepare:build && electron .",
     "dist": "npm run prepare:build && electron-builder --win",
-    "dist:portable": "npm run prepare:build && electron-builder --win portable"
+    "dist:portable": "npm run prepare:build && electron-builder --win portable",
+    "release": "node scripts/release.mjs"
   },
   "devDependencies": {
     "electron": "^33.2.0",
