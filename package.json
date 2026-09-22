@@ -1,6 +1,6 @@
 {
   "name": "alpha-desktop",
-  "version": "2.0.0",
+  "version": "2.0.1",
   "description": "Alpha \u2014 AI work, coordinated. Desktop application.",
   "main": "main.js",
   "author": "Alpha",
@@ -48,6 +48,7 @@
       "main.js",
       "preload.js",
       "desktop-address.cjs",
+      "assets/**/*",
       "build/**/*",
       "!**/*.map"
     ],
@@ -62,6 +63,7 @@
       }
     ],
     "win": {
+      "icon": "assets/icon.ico",
       "target": [
         {
           "target": "nsis",

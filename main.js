@@ -237,6 +237,10 @@ function createWindow() {
     backgroundColor: '#0D0E10',
     show: false,
     title: 'Alpha',
+    // Windows takes the taskbar icon from the packaged .exe, so this matters
+    // when running from source -- without it a developer's window is the
+    // default Electron circle while everyone else's is the product.
+    icon: path.join(__dirname, 'assets', 'icon.ico'),
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       // Non-negotiable: the renderer displays model-generated text and tool
