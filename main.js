@@ -150,15 +150,40 @@ function waitForBackend(timeoutMs = 20000) {
  * ordinarily a second credential for every person to obtain and configure,
  * which is exactly the friction automatic updates exist to remove.
  *
- * But every Alpha user has already run `gh auth login`; that is how the board
- * and their role work at all. `gh auth token` prints that token, so the update
- * check borrows the authentication they already have. Nothing new to set up,
- * no secret in the package, and someone without access to the repository
- * simply gets no updates rather than an error they cannot act on.
+ * But every Alpha user has already signed in to GitHub -- that is how the board
+ * and their role work at all -- so the update check reuses that token rather
+ * than asking for a second credential. Nothing new to set up, no secret in the
+ * package, and someone without access to the repository simply gets no updates
+ * rather than an error they cannot act on.
+ *
+ * Which sign-in, though, is the part that has moved: it was the machine's `gh`
+ * login, and is now Alpha's own where there is one. A teammate who signs in
+ * inside the app and never touches the CLI still gets updates.
  *
  * The token is held in memory for the request and never written anywhere.
  */
 function githubToken() {
+  /**
+   * Alpha's own sign-in first.
+   *
+   * The releases live in a private repository, so reading them needs a token,
+   * and this used to be `gh auth token` alone -- the machine's account. Since
+   * the daemon stopped borrowing that account, a teammate who installs Alpha
+   * and signs in inside it need never run `gh auth login` at all. For them the
+   * CLI has no token, and updates would have been silently switched off
+   * forever: no error, no prompt, just a version that never moved.
+   *
+   * The same file the daemon writes, read directly rather than over HTTP, so a
+   * check can run before the backend is up.
+   */
+  try {
+    const home = process.env.ALPHA_HOME || path.join(require('node:os').homedir(), '.alpha');
+    const stored = JSON.parse(fs.readFileSync(path.join(home, 'github-credential.json'), 'utf8'));
+    if (stored && stored.token) return stored.token;
+  } catch {
+    // Not signed in to Alpha yet, or the file is unreadable. Try the CLI.
+  }
+
   try {
     const { execFileSync } = require('node:child_process');
     const token = execFileSync('gh', ['auth', 'token'], {
@@ -181,6 +206,17 @@ function githubToken() {
  * appearing to work.
  */
 let updater = null;
+
+/**
+ * Put the current GitHub token in the environment for electron-updater, and say
+ * whether there was one. Shared by the scheduled checks and the manual one, so
+ * a sign-in that happened since launch counts for both.
+ */
+function applyGitHubToken() {
+  const token = githubToken();
+  if (token) process.env.GH_TOKEN = token;
+  return Boolean(token);
+}
 
 function startUpdateChecks(window) {
   // Never in development: electron-updater has no packaged app to compare
@@ -207,12 +243,30 @@ function startUpdateChecks(window) {
   log.transports.file.level = 'info';
   autoUpdater.logger = log;
 
-  const token = githubToken();
-  if (!token) {
-    log.info('Update check skipped: no GitHub token available from gh.');
-    return;
-  }
-  process.env.GH_TOKEN = token;
+  /**
+   * The token is resolved per check, not once at startup.
+   *
+   * It used to be read here and the whole function abandoned if it was missing
+   * -- which meant no updater, and no interval either, so updates were off for
+   * the rest of the session with nothing said. That is precisely the state a
+   * first launch is in: the app starts, nobody is signed in yet, and by the
+   * time they are, the only code that could have noticed has already returned.
+   *
+   * Reading it per check also means signing in to Alpha enables updates
+   * immediately, rather than at the next restart.
+   */
+  const check = () => {
+    if (!applyGitHubToken()) {
+      log.info('Update check skipped: not signed in to GitHub yet.');
+      return;
+    }
+    autoUpdater.checkForUpdates().catch(err => {
+      // checkForUpdates rejects as well as emitting 'error'; swallowing it
+      // silently here is what made a failed check indistinguishable from a
+      // successful one that found nothing.
+      log.error('Update check failed:', err && err.message ? err.message : err);
+    });
+  };
 
   /**
    * Download automatically, install when the user is ready.
@@ -246,9 +300,20 @@ function startUpdateChecks(window) {
   });
 
   updater = autoUpdater;
-  autoUpdater.checkForUpdates().catch(() => {});
+  check();
+
+  /**
+   * Once more shortly after launch, then every six hours.
+   *
+   * A single check at startup is one network request to lose: a laptop opened
+   * before its wifi associates, a release published a minute after the app
+   * happened to start, or any transient failure, and the next attempt was six
+   * hours away with nothing to show for it. The early retry costs one request
+   * and closes the common cases.
+   */
+  setTimeout(check, 5 * 60 * 1000);
   // Every six hours, for the machine that stays open all week.
-  setInterval(() => autoUpdater.checkForUpdates().catch(() => {}), 6 * 60 * 60 * 1000);
+  setInterval(check, 6 * 60 * 60 * 1000);
 }
 
 /**
@@ -278,7 +343,12 @@ ipcMain.handle('alpha:check-for-updates', async () => {
     return { status: 'unsupported', reason: 'Updates apply to the installed app, not one run from source.' };
   }
   if (!updater) {
-    return { status: 'unsupported', reason: 'Alpha needs a GitHub sign-in to read its own releases. Run `gh auth login`.' };
+    return { status: 'unsupported', reason: 'Updates need the app to have started its update checks. Restart Alpha.' };
+  }
+  // Releases are in a private repository: without a sign-in there is nothing to
+  // read them with, and saying so beats reporting "up to date".
+  if (!applyGitHubToken()) {
+    return { status: 'unsupported', reason: 'Sign in to GitHub in Connected Accounts, so Alpha can read its own releases.' };
   }
   try {
     const result = await updater.checkForUpdates();
