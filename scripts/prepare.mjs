@@ -143,6 +143,58 @@ console.log(`baked settings:  ${Object.keys(appConfig).join(', ')}`);
 if (unset.length) console.log(`not set:         ${unset.join(', ')} (the app runs without cloud sync)`);
 
 /**
+ * 5b. The staged daemon, started the way an installed app starts it.
+ *
+ * Twice now the installed app has broken where every test passed, because
+ * the tests run on the developer's Node and the app runs on Electron's:
+ *
+ *  - supabase-js was missing from this package's dependencies, and resolved
+ *    anyway on the builder's machine through a stray node_modules higher up;
+ *  - supabase-js needed a global WebSocket, which Electron 33's Node 20 does
+ *    not have, so the team board client never started in any installed copy
+ *    -- no board, no realtime, developers refused Sync -- and nothing said so.
+ *
+ * So before packaging, the staged server is loaded by Electron's own binary
+ * as Node, with the settings an installed app gets, and the team board
+ * client has to come up. No mocks: the real modules, the real client, the
+ * real runtime. A failure stops the release instead of reaching everyone.
+ */
+{
+  const electronBinary = createRequire(import.meta.url)('electron');
+  const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'alpha-runtime-check-'));
+  const server = path.join(OUT, 'server').replace(/\\/g, '/');
+  const probe = `
+    const { supabaseService } = require('${server}/services/supabaseService.js');
+    require('${server}/controllers/dataController.js');
+    require('${server}/controllers/workspaceController.js');
+    const wanted = Boolean(process.env.SUPABASE_URL && process.env.SUPABASE_ANON_KEY);
+    const on = supabaseService.sharesBoard();
+    console.log(JSON.stringify({ node: process.versions.node, wanted, on,
+      problem: typeof supabaseService.connectionProblem === 'function' ? supabaseService.connectionProblem() : null }));
+    process.exit(wanted && !on ? 2 : 0);
+  `;
+  let out = '';
+  try {
+    out = execFileSync(electronBinary, ['-e', probe], {
+      env: { ...process.env, ...appConfig, ELECTRON_RUN_AS_NODE: '1', ALPHA_PACKAGED: '1', ALPHA_HOME: scratch },
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+      windowsHide: true
+    });
+  } catch (err) {
+    const detail = `${err.stdout ?? ''}${err.stderr ?? ''}`.trim();
+    throw new Error(
+      "The staged daemon does not start on Electron's Node, so the installed app would be broken:\n\n" +
+        (detail || err.message)
+    );
+  } finally {
+    fs.rmSync(scratch, { recursive: true, force: true });
+  }
+  const result = JSON.parse(out.trim().split('\n').pop());
+  console.log(`runtime check:   Electron Node ${result.node}, team board ${result.wanted ? (result.on ? 'connects' : 'FAILS') : 'not configured'}`);
+}
+
+/**
  * 6. The GitHub CLI, bundled.
  *
  * Identity, teams, the board and every push go through `gh`, and a teammate
