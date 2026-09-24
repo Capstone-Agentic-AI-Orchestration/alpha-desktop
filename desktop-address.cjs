@@ -10,7 +10,16 @@
  * ends at once.
  */
 const HOST = '127.0.0.1';
-const PORT = Number(process.env.PORT || 3001);
+
+/**
+ * Not 3001: that is where `npm run dev` puts the daemon, and most people who
+ * install Alpha also work on it. Sharing the port meant the installed app's
+ * own daemon could not bind, the source daemon answered its health check
+ * instead, and the window opened onto that -- signed in as the terminal's
+ * `gh`, reading the developer's `.env`, with no team board. A port of its own
+ * lets both run; `waitForBackend` in main.js refuses a stranger either way.
+ */
+const PORT = Number(process.env.ALPHA_DESKTOP_PORT || 43117);
 
 module.exports = {
   HOST,
