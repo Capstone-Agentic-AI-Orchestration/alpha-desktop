@@ -4,6 +4,7 @@ const electron = require('electron');
 const fs = require('node:fs');
 const path = require('node:path');
 const http = require('node:http');
+const crypto = require('node:crypto');
 
 /**
  * Guard against ELECTRON_RUN_AS_NODE.
@@ -108,6 +109,13 @@ function startBackend() {
    */
   if (app.isPackaged) process.env.ALPHA_PACKAGED = '1';
 
+  /**
+   * A name for this launch's daemon, which it repeats back from /api/health.
+   * `waitForBackend` opens the window only for a daemon that says it, so a
+   * different process already on the port is refused, not used.
+   */
+  process.env.ALPHA_INSTANCE = INSTANCE;
+
   // Bind loopback and allow the file:// renderer through CORS. Both are set
   // before the server module is required, because it reads them at import time.
   process.env.HOST = HOST;
@@ -117,7 +125,17 @@ function startBackend() {
   require(path.join(__dirname, 'build', 'server', 'index.js'));
 }
 
-/** Resolve once the API answers, so the window never loads against a dead backend. */
+const INSTANCE = crypto.randomUUID();
+
+/**
+ * Resolve once *this app's* daemon answers, so the window never loads against
+ * a dead backend -- or against someone else's.
+ *
+ * "Anything answering 200" was the old test, and a daemon run from source on
+ * the same port passed it: the app opened as the terminal's `gh` account with
+ * no sign-in, on the developer's own `.env`, where Sync failed with a project
+ * manager's permission error. The health answer now has to carry INSTANCE.
+ */
 function waitForBackend(timeoutMs = 20000) {
   const started = Date.now();
 
@@ -126,9 +144,24 @@ function waitForBackend(timeoutMs = 20000) {
       const req = http.get(
         { host: HOST, port: PORT, path: '/api/health', timeout: 1500 },
         res => {
-          res.resume();
-          if (res.statusCode === 200) return resolve();
-          retry();
+          let body = '';
+          res.setEncoding('utf8');
+          res.on('data', chunk => { body += chunk; });
+          res.on('end', () => {
+            if (res.statusCode !== 200) return retry();
+            let instance;
+            try {
+              instance = JSON.parse(body).instance;
+            } catch {
+              return retry();
+            }
+            if (instance === INSTANCE) return resolve();
+            // A healthy daemon that is not ours will not become ours by waiting.
+            reject(new Error(
+              `Another program is already using ${HOST}:${PORT} -- most likely Alpha running from ` +
+              'source, or a copy of Alpha that did not close. Close it, then open Alpha again.'
+            ));
+          });
         }
       );
       req.on('error', retry);
