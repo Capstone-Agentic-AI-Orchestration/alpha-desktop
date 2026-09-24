@@ -28,7 +28,7 @@ if (!electron || typeof electron === 'string' || !electron.app) {
   process.exit(1);
 }
 
-const { app, BrowserWindow, dialog, ipcMain, shell } = electron;
+const { app, BrowserWindow, dialog, ipcMain, shell, Menu } = electron;
 
 /**
  * Alpha desktop shell.
@@ -413,6 +413,10 @@ function createWindow() {
     minHeight: 640,
     backgroundColor: '#0D0E10',
     show: false,
+    // The renderer owns the product navigation. Keep Electron's native menu
+    // hidden so Windows does not add a second File/Edit/View/Window/Help bar
+    // above the Alpha workspace.
+    autoHideMenuBar: true,
     title: 'Alpha',
     // Windows takes the taskbar icon from the packaged .exe, so this matters
     // when running from source -- without it a developer's window is the
@@ -428,6 +432,7 @@ function createWindow() {
       sandbox: false
     }
   });
+  mainWindow.setMenuBarVisibility(false);
 
   mainWindow.once('ready-to-show', () => mainWindow.show());
 
@@ -475,6 +480,10 @@ function createWindow() {
 
 app.whenReady().then(async () => {
   try {
+    // Electron creates a default application menu when none is supplied. Alpha
+    // is a focused workspace app, so remove that Windows menu before creating
+    // the first window instead of leaving an empty native chrome strip.
+    Menu.setApplicationMenu(null);
     startBackend();
     await waitForBackend();
   } catch (err) {
