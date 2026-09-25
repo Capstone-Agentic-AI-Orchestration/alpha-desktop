@@ -141,6 +141,12 @@ fs.writeFileSync(path.join(OUT, 'app-config.json'), JSON.stringify(appConfig, nu
 const unset = PUBLIC_SETTINGS.filter(key => !appConfig[key]);
 console.log(`baked settings:  ${Object.keys(appConfig).join(', ')}`);
 if (unset.length) console.log(`not set:         ${unset.join(', ')} (the app runs without cloud sync)`);
+if (!appConfig.ALPHA_CLOUD_API) {
+  console.warn(
+    'profile sign-in: ALPHA_CLOUD_API is not set; the installed app cannot target a remembered ' +
+    'GitHub profile and will ask for a hosted API configuration instead of silently using the browser account.'
+  );
+}
 
 /**
  * 5b. The staged daemon, started the way an installed app starts it.
