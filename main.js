@@ -490,7 +490,7 @@ function createWindow() {
     height: 900,
     minWidth: 1024,
     minHeight: 640,
-    backgroundColor: '#0D0E10',
+    backgroundColor: '#09090B',
     show: false,
     // The renderer owns the product navigation. Keep Electron's native menu
     // hidden so Windows does not add a second File/Edit/View/Window/Help bar
