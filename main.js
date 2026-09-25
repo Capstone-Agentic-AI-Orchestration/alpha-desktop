@@ -31,6 +31,25 @@ if (!electron || typeof electron === 'string' || !electron.app) {
 const { app, BrowserWindow, dialog, ipcMain, shell, Menu } = electron;
 
 /**
+ * Some Windows GPU/driver combinations crash Chromium before Electron can
+ * create the window or start Alpha's in-process API. That leaves the browser
+ * renderer talking to a dead 43117 daemon and surfaces as a misleading 502.
+ * Alpha's UI is deliberately lightweight, so a stable software compositor is
+ * preferable to failing the whole desktop app. Keep hardware acceleration on
+ * other platforms where this Windows-specific failure does not apply.
+ */
+if (process.platform === 'win32') {
+  app.disableHardwareAcceleration();
+  // Electron 33 can still spin up a GPU helper before the first window on
+  // machines whose ANGLE/driver DLLs are unavailable. These switches make the
+  // software-compositor choice explicit for the browser and GPU process.
+  app.commandLine.appendSwitch('disable-gpu');
+  app.commandLine.appendSwitch('disable-gpu-compositing');
+  app.commandLine.appendSwitch('in-process-gpu');
+  app.commandLine.appendSwitch('use-angle', 'swiftshader');
+}
+
+/**
  * Alpha desktop shell.
  *
  * The backend is NOT a separate process here. `alpha-be-main` compiles to
