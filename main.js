@@ -67,6 +67,31 @@ if (process.platform === 'win32') {
 const { HOST, PORT } = require('./desktop-address.cjs');
 
 let mainWindow = null;
+let focusWhenReady = false;
+
+/**
+ * The daemon lives in this Electron process and owns a fixed loopback port.
+ * Starting a second Alpha would therefore fail with EADDRINUSE before the
+ * first window can explain what happened. Keep one process per user profile;
+ * a duplicate launch simply brings the existing window forward.
+ */
+const gotSingleInstanceLock = app.requestSingleInstanceLock();
+
+const focusMainWindow = () => {
+  if (!mainWindow) {
+    focusWhenReady = true;
+    return;
+  }
+  if (mainWindow.isMinimized()) mainWindow.restore();
+  if (!mainWindow.isVisible()) mainWindow.show();
+  mainWindow.focus();
+};
+
+if (!gotSingleInstanceLock) {
+  app.quit();
+} else {
+  app.on('second-instance', focusMainWindow);
+}
 
 /**
  * Deployment settings, baked in when the app was built.
@@ -453,7 +478,13 @@ function createWindow() {
   });
   mainWindow.setMenuBarVisibility(false);
 
-  mainWindow.once('ready-to-show', () => mainWindow.show());
+  mainWindow.once('ready-to-show', () => {
+    mainWindow.show();
+    if (focusWhenReady) {
+      focusWhenReady = false;
+      mainWindow.focus();
+    }
+  });
 
   /**
    * External links open in the real browser, never inside the app frame — and
@@ -497,33 +528,35 @@ function createWindow() {
   mainWindow.on('closed', () => { mainWindow = null; });
 }
 
-app.whenReady().then(async () => {
-  try {
-    // Electron creates a default application menu when none is supplied. Alpha
-    // is a focused workspace app, so remove that Windows menu before creating
-    // the first window instead of leaving an empty native chrome strip.
-    Menu.setApplicationMenu(null);
-    startBackend();
-    await waitForBackend();
-  } catch (err) {
-    // Surface the reason instead of opening a window onto nothing.
-    dialog.showErrorBox(
-      'Alpha could not start',
-      `The local engine failed to start.\n\n${err && err.message ? err.message : String(err)}`
-    );
-    app.quit();
-    return;
-  }
+if (gotSingleInstanceLock) {
+  app.whenReady().then(async () => {
+    try {
+      // Electron creates a default application menu when none is supplied. Alpha
+      // is a focused workspace app, so remove that Windows menu before creating
+      // the first window instead of leaving an empty native chrome strip.
+      Menu.setApplicationMenu(null);
+      startBackend();
+      await waitForBackend();
+    } catch (err) {
+      // Surface the reason instead of opening a window onto nothing.
+      dialog.showErrorBox(
+        'Alpha could not start',
+        `The local engine failed to start.\n\n${err && err.message ? err.message : String(err)}`
+      );
+      app.quit();
+      return;
+    }
 
-  createWindow();
+    createWindow();
 
-  // After the window exists, so an update dialog has a parent to attach to.
-  startUpdateChecks(mainWindow);
+    // After the window exists, so an update dialog has a parent to attach to.
+    startUpdateChecks(mainWindow);
 
-  app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) createWindow();
+    app.on('activate', () => {
+      if (BrowserWindow.getAllWindows().length === 0) createWindow();
+    });
   });
-});
+}
 
 app.on('window-all-closed', () => {
   // Quit on every platform: the backend lives in this process, so leaving it
