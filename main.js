@@ -59,21 +59,22 @@ if (process.platform === 'win32') {
  * one process, one lifecycle, nothing to orphan on quit.
  *
  * The renderer is the Vite build loaded from disk. It talks to the loopback
- * daemon over HTTP exactly as it does in development -- the address is compiled
- * in by `prepare.mjs` from `desktop-address.cjs` -- so no frontend code changes
- * between `npm run dev` and the packaged app.
+ * daemon over HTTP exactly as it does in development. The desktop receives its
+ * runtime address through the preload bridge; the web build keeps its
+ * same-origin API configuration.
  */
 
-const { HOST, PORT } = require('./desktop-address.cjs');
+const { HOST, PORT: BUILD_PORT } = require('./desktop-address.cjs');
 
 let mainWindow = null;
 let focusWhenReady = false;
+let PORT = BUILD_PORT;
 
 /**
- * The daemon lives in this Electron process and owns a fixed loopback port.
- * Starting a second Alpha would therefore fail with EADDRINUSE before the
- * first window can explain what happened. Keep one process per user profile;
- * a duplicate launch simply brings the existing window forward.
+ * Keep one process per Electron user profile; a duplicate launch simply brings
+ * the existing window forward. The engine itself receives an OS-assigned
+ * loopback port, so source runs and separately profiled test/install copies
+ * can coexist without EADDRINUSE.
  */
 const gotSingleInstanceLock = app.requestSingleInstanceLock();
 
@@ -138,7 +139,27 @@ function addBundledGhToPath() {
   }
 }
 
-function startBackend() {
+function waitForServerStart(server, timeoutMs = 20000) {
+  if (server.listening) return Promise.resolve();
+
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => finish(new Error(`Local engine did not bind a port within ${timeoutMs}ms`)), timeoutMs);
+    const onListening = () => finish();
+    const onError = err => finish(err);
+    const finish = err => {
+      clearTimeout(timer);
+      server.removeListener('listening', onListening);
+      server.removeListener('error', onError);
+      if (err) reject(err);
+      else resolve();
+    };
+
+    server.once('listening', onListening);
+    server.once('error', onError);
+  });
+}
+
+async function startBackend() {
   loadBuildConfig();
   addBundledGhToPath();
 
@@ -163,10 +184,24 @@ function startBackend() {
   // Bind loopback and allow the file:// renderer through CORS. Both are set
   // before the server module is required, because it reads them at import time.
   process.env.HOST = HOST;
-  process.env.PORT = String(PORT);
-  process.env.CORS_ORIGIN = ['file://', `http://${HOST}:${PORT}`].join(',');
+  // Let the OS reserve an available loopback port atomically. A fixed desktop
+  // port collided with source runs and older installations; probing and then
+  // closing a socket would leave a race before Express binds it.
+  process.env.PORT = '0';
+  process.env.CORS_ORIGIN = 'file://';
 
-  require(path.join(__dirname, 'build', 'server', 'index.js'));
+  const backend = require(path.join(__dirname, 'build', 'server', 'index.js'));
+  if (!backend.server || typeof backend.server.listen !== 'function') {
+    throw new Error('The local engine did not expose its listener to the desktop shell.');
+  }
+  await waitForServerStart(backend.server);
+
+  const address = backend.server.address();
+  if (!address || typeof address === 'string' || !address.port) {
+    throw new Error('The local engine started without reporting its loopback port.');
+  }
+  PORT = address.port;
+  process.env.ALPHA_DESKTOP_PORT = String(PORT);
 }
 
 const INSTANCE = crypto.randomUUID();
@@ -468,6 +503,12 @@ function createWindow() {
     icon: path.join(__dirname, 'assets', 'icon.ico'),
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
+      // The engine gets an OS-assigned port at launch. Pass that address to the
+      // isolated renderer rather than baking a shared port into the installer.
+      additionalArguments: [
+        `--alpha-api-base=http://${HOST}:${PORT}/api`,
+        `--alpha-ws-url=ws://${HOST}:${PORT}`
+      ],
       // Non-negotiable: the renderer displays model-generated text and tool
       // output. With nodeIntegration on, any injected string in that output
       // could reach child_process.
@@ -535,7 +576,7 @@ if (gotSingleInstanceLock) {
       // is a focused workspace app, so remove that Windows menu before creating
       // the first window instead of leaving an empty native chrome strip.
       Menu.setApplicationMenu(null);
-      startBackend();
+      await startBackend();
       await waitForBackend();
     } catch (err) {
       // Surface the reason instead of opening a window onto nothing.

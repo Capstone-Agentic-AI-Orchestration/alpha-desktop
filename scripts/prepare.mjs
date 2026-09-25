@@ -23,7 +23,8 @@ const FE = path.join(root, 'alpha-fe-main');
 const BE = path.join(root, 'alpha-be-main');
 const OUT = path.join(desktop, 'build');
 
-// The daemon address main.js binds, so the renderer is compiled to call it.
+// A fallback for the renderer. Packaged launches receive their actual
+// OS-assigned engine address through the Electron preload bridge.
 const { apiUrl, wsUrl } = createRequire(import.meta.url)('../desktop-address.cjs');
 
 const run = (cmd, cwd, env = {}) => {

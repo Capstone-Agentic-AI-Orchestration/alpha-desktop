@@ -1,8 +1,9 @@
 'use strict';
 
 /**
- * Where the desktop's own daemon listens -- one definition for `main.js`, which
- * binds it, and `scripts/prepare.mjs`, which compiles it into the renderer.
+ * The build-time fallback address for the desktop renderer. `prepare.mjs`
+ * compiles it into the assets for older preloads; current Electron launches
+ * pass the daemon's OS-assigned loopback address through `preload.js` instead.
  *
  * Not deployment configuration: every desktop talks to its own loopback
  * daemon. Loopback always, because this API spawns agents that run shell
@@ -12,12 +13,8 @@
 const HOST = '127.0.0.1';
 
 /**
- * Not 3001: that is where `npm run dev` puts the daemon, and most people who
- * install Alpha also work on it. Sharing the port meant the installed app's
- * own daemon could not bind, the source daemon answered its health check
- * instead, and the window opened onto that -- signed in as the terminal's
- * `gh`, reading the developer's `.env`, with no team board. A port of its own
- * lets both run; `waitForBackend` in main.js refuses a stranger either way.
+ * Retained as a harmless fallback for a renderer opened without the new bridge.
+ * The running desktop does not bind this fixed port.
  */
 const PORT = Number(process.env.ALPHA_DESKTOP_PORT || 43117);
 

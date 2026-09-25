@@ -2,12 +2,29 @@
 
 const { contextBridge, ipcRenderer } = require('electron');
 
+function runtimeArgument(prefix) {
+  const value = process.argv.find(argument => argument.startsWith(prefix))?.slice(prefix.length);
+  if (!value) return undefined;
+  try {
+    const parsed = new URL(value);
+    const expectedProtocol = prefix === '--alpha-api-base=' ? 'http:' : 'ws:';
+    const expectedPath = prefix === '--alpha-api-base=' ? '/api' : '/';
+    if (parsed.protocol !== expectedProtocol || parsed.hostname !== '127.0.0.1' ||
+        parsed.username || parsed.password || parsed.search || parsed.hash || parsed.pathname !== expectedPath) {
+      return undefined;
+    }
+    return value;
+  } catch {
+    return undefined;
+  }
+}
+
 /**
  * Deliberately minimal.
  *
  * The renderer already reaches the backend over HTTP and WebSocket on
- * its own loopback port (desktop-address.cjs), exactly as it does in the browser, so nothing needs to cross
- * the context bridge to make the app work. Every capability exposed here is
+ * its own loopback port, exactly as it does in the browser. The runtime
+ * addresses cross the bridge, and every other exposed capability is one the
  * one the renderer could not otherwise abuse — so the surface stays at the
  * bare identification the UI needs, and grows only when a feature genuinely
  * requires it (native dialogs, tray, auto-update).
@@ -15,6 +32,8 @@ const { contextBridge, ipcRenderer } = require('electron');
 contextBridge.exposeInMainWorld('alphaDesktop', {
   isDesktop: true,
   platform: process.platform,
+  apiBase: runtimeArgument('--alpha-api-base='),
+  wsUrl: runtimeArgument('--alpha-ws-url='),
   versions: {
     electron: process.versions.electron,
     node: process.versions.node,
