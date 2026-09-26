@@ -138,6 +138,48 @@ if (!appConfig.ALPHA_ORG) {
   );
 }
 
+/**
+ * 5a. The Supabase key has to be one the project accepts.
+ *
+ * These settings come from whoever runs the build, so a stale or mistyped key
+ * in one person's .env reached every installed desktop through auto-update:
+ * v2.0.11 shipped a key Supabase refused, and every Sync failed with "Could
+ * not read the team board: Invalid API key". One request to the project's
+ * auth settings -- public, and answered only for a valid key -- turns that
+ * into a failed build on the builder's machine.
+ *
+ * A refusal stops the build. Not reaching Supabase at all only warns, so an
+ * offline source build still works; do not publish one of those.
+ */
+if (appConfig.SUPABASE_URL && appConfig.SUPABASE_ANON_KEY) {
+  const probe = new URL('/auth/v1/settings', appConfig.SUPABASE_URL);
+  let status;
+  try {
+    const res = await fetch(probe, {
+      headers: { apikey: appConfig.SUPABASE_ANON_KEY },
+      signal: AbortSignal.timeout(15_000)
+    });
+    status = res.status;
+  } catch (err) {
+    console.warn(
+      `\nWarning — could not reach ${probe.origin} to check SUPABASE_ANON_KEY (${err?.message ?? err}).\n` +
+      'The key is unverified. Do not publish this build.'
+    );
+  }
+  if (status === 401 || status === 403) {
+    throw new Error(
+      `Supabase refused SUPABASE_ANON_KEY for ${probe.origin} (HTTP ${status}). Every installed app ` +
+      'would fail Sync with "Invalid API key". Copy the current anon key from Supabase -> Project ' +
+      'Settings -> API into the build environment or alpha-be-main/.env, and check SUPABASE_URL ' +
+      'names the same project.'
+    );
+  }
+  if (status !== undefined && status !== 200) {
+    console.warn(`\nWarning — ${probe.origin} answered HTTP ${status} when checking SUPABASE_ANON_KEY.`);
+  }
+  if (status === 200) console.log('supabase key:    accepted by the project');
+}
+
 fs.writeFileSync(path.join(OUT, 'app-config.json'), JSON.stringify(appConfig, null, 2) + '\n');
 const unset = PUBLIC_SETTINGS.filter(key => !appConfig[key]);
 console.log(`baked settings:  ${Object.keys(appConfig).join(', ')}`);
