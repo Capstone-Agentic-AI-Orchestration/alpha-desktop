@@ -28,7 +28,7 @@ if (!electron || typeof electron === 'string' || !electron.app) {
   process.exit(1);
 }
 
-const { app, BrowserWindow, dialog, ipcMain, shell, Menu } = electron;
+const { app, BrowserWindow, dialog, ipcMain, shell, Menu, safeStorage } = electron;
 
 /**
  * Some Windows GPU/driver combinations crash Chromium before Electron can
@@ -189,6 +189,22 @@ async function startBackend() {
   // closing a socket would leave a race before Express binds it.
   process.env.PORT = '0';
   process.env.CORS_ORIGIN = 'file://';
+
+  /**
+   * Encryption for the remembered GitHub accounts, handed to the daemon.
+   *
+   * The daemon keeps one token per remembered account so switching between
+   * them does not go back to GitHub. `safeStorage` is Windows DPAPI here: only
+   * this Windows user can open what it seals. The daemon also runs from source
+   * with no Electron, so it takes this as an optional global rather than
+   * importing Electron, and without it falls back to a user-only file.
+   * Available only after `app` is ready, which it is by the time this runs.
+   */
+  globalThis.__alphaSecretSealer = {
+    available: () => safeStorage.isEncryptionAvailable(),
+    seal: plain => safeStorage.encryptString(plain).toString('base64'),
+    open: sealed => safeStorage.decryptString(Buffer.from(sealed, 'base64'))
+  };
 
   const backend = require(path.join(__dirname, 'build', 'server', 'index.js'));
   if (!backend.server || typeof backend.server.listen !== 'function') {
