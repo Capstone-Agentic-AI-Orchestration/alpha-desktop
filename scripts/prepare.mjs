@@ -42,7 +42,15 @@ const run = (cmd, cwd, env = {}) => {
  * public already. SUPABASE_JWT_SECRET, GitHub secrets and private keys must
  * never be added here.
  */
-const PUBLIC_SETTINGS = ['ALPHA_ORG', 'ALPHA_CLOUD_API', 'SUPABASE_URL', 'SUPABASE_ANON_KEY'];
+const PUBLIC_SETTINGS = [
+  'ALPHA_ORG',
+  'ALPHA_CLOUD_API',
+  'SUPABASE_URL',
+  'SUPABASE_ANON_KEY',
+  // The CI template repository and ref: a desktop scaffolds repositories too.
+  'ALPHAORCH_WORKFLOW_REPO',
+  'ALPHAORCH_WORKFLOW_REF'
+];
 
 const copyDir = (from, to) => {
   fs.rmSync(to, { recursive: true, force: true });
@@ -184,6 +192,12 @@ fs.writeFileSync(path.join(OUT, 'app-config.json'), JSON.stringify(appConfig, nu
 const unset = PUBLIC_SETTINGS.filter(key => !appConfig[key]);
 console.log(`baked settings:  ${Object.keys(appConfig).join(', ')}`);
 if (unset.length) console.log(`not set:         ${unset.join(', ')} (the app runs without cloud sync)`);
+if (!appConfig.ALPHAORCH_WORKFLOW_REPO || !appConfig.ALPHAORCH_WORKFLOW_REF) {
+  console.warn(
+    'scaffolding: ALPHAORCH_WORKFLOW_REPO / ALPHAORCH_WORKFLOW_REF are not both set; the installed app ' +
+    'will refuse to create repositories until they are, because it would have no CI templates to give them.'
+  );
+}
 if (!appConfig.ALPHA_CLOUD_API) {
   console.warn(
     'profile sign-in: ALPHA_CLOUD_API is not set; the installed app cannot target a remembered ' +
