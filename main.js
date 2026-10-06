@@ -303,17 +303,27 @@ function waitForBackend(timeoutMs = 20000) {
  */
 function githubToken() {
   /**
-   * Alpha's own sign-in first.
-   *
-   * The releases live in a private repository, so reading them needs a token,
-   * and this used to be `gh auth token` alone -- the machine's account. Since
-   * the daemon stopped borrowing that account, a teammate who installs Alpha
-   * and signs in inside it need never run `gh auth login` at all. For them the
-   * CLI has no token, and updates would have been silently switched off
-   * forever: no error, no prompt, just a version that never moved.
-   *
-   * The same file the daemon writes, read directly rather than over HTTP, so a
-   * check can run before the backend is up.
+   * Connected Accounts moved Alpha's credential into the protected profile
+   * vault. The old file below is migrated and removed when the daemon starts,
+   * so looking for it here made a valid in-app sign-in look like no sign-in at
+   * all. The backend is in this same Electron process; read the active,
+   * authenticated session from its shared module instead of exposing the
+   * token through the renderer or a local HTTP endpoint.
+   */
+  try {
+    const auth = require(path.join(__dirname, 'build', 'server', 'services', 'alphaGitHubToken.js'));
+    if (auth.isSessionAuthenticated()) {
+      const token = auth.storedToken();
+      if (token) return token;
+    }
+  } catch {
+    // The backend may not have started yet. Keep the legacy/CLI fallbacks.
+  }
+
+  /**
+   * Compatibility with the older credential layout. The backend migrates this
+   * file into its protected account vault during startup; keep the fallback in
+   * case the backend module is unavailable while checking an update.
    */
   try {
     const home = process.env.ALPHA_HOME || path.join(require('node:os').homedir(), '.alpha');
