@@ -18,6 +18,7 @@ import { execFileSync, execSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import dotenv from 'dotenv';
 
 import { publishReleaseNotes } from './releaseNotes.mjs';
 
@@ -30,6 +31,34 @@ const die = (message) => {
   console.error(`\n${message}\n`);
   process.exit(1);
 };
+
+/**
+ * A desktop release must be able to reach the shared cloud API. `prepare.mjs`
+ * deliberately allows source builds without it, but that would make a
+ * published installer silently lose cloud relay features (including ticket
+ * requests). Resolve the same inputs as the build without changing either
+ * the shell environment or the developer's .env file.
+ */
+const backendEnvFile = path.resolve(desktop, '..', 'alpha-be-main', '.env');
+const backendEnv = fs.existsSync(backendEnvFile)
+  ? dotenv.parse(fs.readFileSync(backendEnvFile))
+  : {};
+const cloudApi = (process.env.ALPHA_CLOUD_API || backendEnv.ALPHA_CLOUD_API || '').trim();
+if (!cloudApi) {
+  die(
+    'ALPHA_CLOUD_API is required for a desktop release. Set it in the release environment ' +
+    'or alpha-be-main/.env. No source or hosted settings were changed.'
+  );
+}
+try {
+  const address = new URL(cloudApi);
+  if (address.protocol !== 'https:' || !address.pathname.replace(/\/$/, '').endsWith('/api')
+    || address.username || address.password || address.search || address.hash) {
+    die('ALPHA_CLOUD_API must be an HTTPS API base URL ending in /api, without credentials or query parameters.');
+  }
+} catch {
+  die('ALPHA_CLOUD_API must be a valid HTTPS API base URL ending in /api.');
+}
 
 /** The repository releases go to, from the same config electron-builder reads. */
 const repo = (() => {
