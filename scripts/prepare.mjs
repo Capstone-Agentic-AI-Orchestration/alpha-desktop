@@ -128,14 +128,24 @@ const count = dir =>
 console.log(`\nstaged renderer: ${count(path.join(OUT, 'renderer'))} files`);
 console.log(`staged server:   ${count(path.join(OUT, 'server'))} files`);
 
-// 5. Deployment settings, from the build's environment, falling back to the
-//    builder's own backend .env for a local `npm start`.
+// 5. Deployment settings. Explicit build environment values win, then the
+//    builder's backend .env, then the current staged public settings. Keeping
+//    that fallback lets a local app start reuse its existing configuration.
 const localEnvFile = path.join(BE, '.env');
 const localEnv = fs.existsSync(localEnvFile) ? dotenv.parse(fs.readFileSync(localEnvFile)) : {};
+const stagedConfigFile = path.join(OUT, 'app-config.json');
+let stagedConfig = {};
+if (fs.existsSync(stagedConfigFile)) {
+  try {
+    stagedConfig = JSON.parse(fs.readFileSync(stagedConfigFile, 'utf8'));
+  } catch (err) {
+    throw new Error('Could not read existing staged app-config.json: ' + (err?.message ?? err));
+  }
+}
 
 const appConfig = {};
 for (const key of PUBLIC_SETTINGS) {
-  const value = process.env[key] || localEnv[key];
+  const value = process.env[key] || localEnv[key] || stagedConfig[key];
   if (value) appConfig[key] = value;
 }
 
