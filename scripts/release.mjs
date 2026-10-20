@@ -25,6 +25,10 @@ import { publishReleaseNotes } from './releaseNotes.mjs';
 const here = path.dirname(fileURLToPath(import.meta.url));
 const desktop = path.resolve(here, '..');
 const pkg = JSON.parse(fs.readFileSync(path.join(desktop, 'package.json'), 'utf8'));
+const gh = (() => {
+  const bundled = path.join(desktop, 'vendor', 'gh', 'gh.exe');
+  return fs.existsSync(bundled) ? bundled : 'gh';
+})();
 
 const say = (message) => console.log(message);
 const die = (message) => {
@@ -87,9 +91,34 @@ const repo = (() => {
   return match[1];
 })();
 
+/**
+ * Releases must originate from a pushed release branch. electron-builder's
+ * GitHub publisher creates a missing release tag without a target commit;
+ * GitHub then defaults that tag to the repository's default branch. We create
+ * and push the version tag from this branch after the package checks pass, so
+ * a live-test release can never silently tag main.
+ */
+const git = (args) => execFileSync('git', args, { cwd: desktop, windowsHide: true }).toString().trim();
+const branch = git(['branch', '--show-current']);
+const defaultBranch = (() => {
+  try { return git(['symbolic-ref', '--quiet', '--short', 'refs/remotes/origin/HEAD']).replace(/^origin\//, ''); }
+  catch { return ''; }
+})();
+if (!branch || ['main', 'master', defaultBranch].filter(Boolean).includes(branch) || !branch.startsWith('release/')) {
+  die(`Run desktop releases from a dedicated release/... branch; the current branch is "${branch || '(detached HEAD)'}".`);
+}
+if (git(['status', '--porcelain'])) {
+  die('Commit and push the release branch before packaging. The release tool will not publish uncommitted source changes.');
+}
+const headCommit = git(['rev-parse', 'HEAD']);
+const remoteBranch = git(['ls-remote', '--heads', 'origin', `refs/heads/${branch}`]).split(/\s+/)[0] ?? '';
+if (!remoteBranch || remoteBranch !== headCommit) {
+  die('Push this release branch to GitHub at its current commit before packaging. No release tag was created.');
+}
+
 const token = (() => {
   try {
-    return execFileSync('gh', ['auth', 'token'], { windowsHide: true }).toString().trim();
+    return execFileSync(gh, ['auth', 'token'], { windowsHide: true }).toString().trim();
   } catch {
     return '';
   }
@@ -103,10 +132,24 @@ if (!token) die('Not signed in to GitHub. Run `gh auth login`, then try again.')
  * upload.
  */
 const tag = `v${pkg.version}`;
+const localTagCommit = (() => {
+  try { return git(['rev-parse', `${tag}^{commit}`]); }
+  catch { return ''; }
+})();
+const remoteTagLines = git(['ls-remote', '--tags', 'origin', `refs/tags/${tag}`, `refs/tags/${tag}^{}`]);
+const remoteTagCommit = (() => {
+  const lines = remoteTagLines.split(/\r?\n/).filter(Boolean);
+  const peeled = lines.find(line => line.endsWith(`refs/tags/${tag}^{}`));
+  const direct = lines.find(line => line.endsWith(`refs/tags/${tag}`));
+  return (peeled ?? direct)?.split(/\s+/)[0] ?? '';
+})();
+if ((localTagCommit && localTagCommit !== headCommit) || (remoteTagCommit && remoteTagCommit !== headCommit)) {
+  die(`${tag} already points to a different commit. Raise the version before publishing; no existing tag will be changed.`);
+}
 const existing = (() => {
   try {
     return JSON.parse(
-      execFileSync('gh', ['release', 'view', tag, '--repo', repo, '--json', 'tagName,isDraft'], {
+      execFileSync(gh, ['release', 'view', tag, '--repo', repo, '--json', 'tagName,isDraft'], {
         windowsHide: true,
         stdio: ['ignore', 'pipe', 'ignore']
       }).toString()
@@ -126,9 +169,19 @@ if (existing && !existing.isDraft) {
 say(`Releasing ${tag} to ${repo}`);
 say('Building the renderer, the daemon and the installer. This takes a few minutes.\n');
 
-// A constant command line, with nothing interpolated into it; the shell is
-// here only for `&&`.
-execSync('npm run prepare:build && npx electron-builder --win --publish always', {
+execSync('npm run prepare:build', {
+  cwd: desktop,
+  stdio: 'inherit',
+  env: { ...process.env, GH_TOKEN: token, ALPHA_ORCHESTRATION_ENABLED: '1', ALPHA_REQUIRE_SUPABASE_VERIFY: '1' }
+});
+
+if (!localTagCommit) execFileSync('git', ['tag', '-a', tag, '-m', `Release ${tag}`], { cwd: desktop, windowsHide: true });
+if (!remoteTagCommit) {
+  execFileSync('git', ['push', 'origin', `refs/tags/${tag}`], { cwd: desktop, stdio: 'inherit', windowsHide: true });
+}
+say(`Release tag ${tag} points to ${branch} at ${headCommit}.`);
+
+execSync('npx electron-builder --win --publish always', {
   cwd: desktop,
   stdio: 'inherit',
   env: { ...process.env, GH_TOKEN: token, ALPHA_ORCHESTRATION_ENABLED: '1' }

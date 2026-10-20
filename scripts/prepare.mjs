@@ -172,9 +172,14 @@ if (!appConfig.ALPHA_ORG) {
  * A refusal stops the build. Not reaching Supabase at all only warns, so an
  * offline source build still works; do not publish one of those.
  */
+const requireVerifiedSupabase = process.env.ALPHA_REQUIRE_SUPABASE_VERIFY === '1';
+if (requireVerifiedSupabase && (!appConfig.SUPABASE_URL || !appConfig.SUPABASE_ANON_KEY)) {
+  throw new Error('A desktop release needs both SUPABASE_URL and SUPABASE_ANON_KEY so the team board can be verified.');
+}
 if (appConfig.SUPABASE_URL && appConfig.SUPABASE_ANON_KEY) {
   const probe = new URL('/auth/v1/settings', appConfig.SUPABASE_URL);
   let status;
+  let probeError;
   try {
     const res = await fetch(probe, {
       headers: { apikey: appConfig.SUPABASE_ANON_KEY },
@@ -182,6 +187,7 @@ if (appConfig.SUPABASE_URL && appConfig.SUPABASE_ANON_KEY) {
     });
     status = res.status;
   } catch (err) {
+    probeError = err;
     console.warn(
       `\nWarning — could not reach ${probe.origin} to check SUPABASE_ANON_KEY (${err?.message ?? err}).\n` +
       'The key is unverified. Do not publish this build.'
@@ -197,6 +203,12 @@ if (appConfig.SUPABASE_URL && appConfig.SUPABASE_ANON_KEY) {
   }
   if (status !== undefined && status !== 200) {
     console.warn(`\nWarning — ${probe.origin} answered HTTP ${status} when checking SUPABASE_ANON_KEY.`);
+  }
+  if (requireVerifiedSupabase && status !== 200) {
+    throw new Error(
+      `The release build could not verify SUPABASE_ANON_KEY${status === undefined ? ` because ${probeError?.message ?? 'the Supabase check did not complete'}` : ` (HTTP ${status})`}. ` +
+      'The live-test installer was not published.'
+    );
   }
   if (status === 200) console.log('supabase key:    accepted by the project');
 }
