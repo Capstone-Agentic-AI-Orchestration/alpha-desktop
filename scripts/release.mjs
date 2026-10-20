@@ -43,7 +43,16 @@ const backendEnvFile = path.resolve(desktop, '..', 'alpha-be-main', '.env');
 const backendEnv = fs.existsSync(backendEnvFile)
   ? dotenv.parse(fs.readFileSync(backendEnvFile))
   : {};
-const cloudApi = (process.env.ALPHA_CLOUD_API || backendEnv.ALPHA_CLOUD_API || '').trim();
+const stagedConfigFile = path.join(desktop, 'build', 'app-config.json');
+let stagedConfig = {};
+if (fs.existsSync(stagedConfigFile)) {
+  try {
+    stagedConfig = JSON.parse(fs.readFileSync(stagedConfigFile, 'utf8'));
+  } catch (err) {
+    die(`Could not read staged app-config.json: ${err?.message ?? err}`);
+  }
+}
+const cloudApi = (process.env.ALPHA_CLOUD_API || backendEnv.ALPHA_CLOUD_API || stagedConfig.ALPHA_CLOUD_API || '').trim();
 if (!cloudApi) {
   die(
     'ALPHA_CLOUD_API is required for a desktop release. Set it in the release environment ' +
@@ -122,7 +131,7 @@ say('Building the renderer, the daemon and the installer. This takes a few minut
 execSync('npm run prepare:build && npx electron-builder --win --publish always', {
   cwd: desktop,
   stdio: 'inherit',
-  env: { ...process.env, GH_TOKEN: token }
+  env: { ...process.env, GH_TOKEN: token, ALPHA_ORCHESTRATION_ENABLED: '1' }
 });
 
 say(`\nPublished ${tag}.`);

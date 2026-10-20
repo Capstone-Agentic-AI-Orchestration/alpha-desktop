@@ -47,6 +47,8 @@ const PUBLIC_SETTINGS = [
   'ALPHA_CLOUD_API',
   'SUPABASE_URL',
   'SUPABASE_ANON_KEY',
+  // Available by default on desktop; each project keeps its own opt-in.
+  'ALPHA_ORCHESTRATION_ENABLED',
   // The CI template repository and ref: a desktop scaffolds repositories too.
   'ALPHAORCH_WORKFLOW_REPO',
   'ALPHAORCH_WORKFLOW_REF'
@@ -145,7 +147,8 @@ if (fs.existsSync(stagedConfigFile)) {
 
 const appConfig = {};
 for (const key of PUBLIC_SETTINGS) {
-  const value = process.env[key] || localEnv[key] || stagedConfig[key];
+  const value = process.env[key] || localEnv[key] || stagedConfig[key] ||
+    (key === 'ALPHA_ORCHESTRATION_ENABLED' ? '1' : undefined);
   if (value) appConfig[key] = value;
 }
 
@@ -242,9 +245,10 @@ if (!appConfig.ALPHA_CLOUD_API) {
     require('${server}/controllers/workspaceController.js');
     const wanted = Boolean(process.env.SUPABASE_URL && process.env.SUPABASE_ANON_KEY);
     const on = supabaseService.sharesBoard();
-    console.log(JSON.stringify({ node: process.versions.node, wanted, on,
+    const { ALPHA_ORCHESTRATION_ENABLED } = require('${server}/config/env.js');
+    console.log(JSON.stringify({ node: process.versions.node, wanted, on, orchestratorEnabled: ALPHA_ORCHESTRATION_ENABLED,
       problem: typeof supabaseService.connectionProblem === 'function' ? supabaseService.connectionProblem() : null }));
-    process.exit(wanted && !on ? 2 : 0);
+    process.exit(wanted && !on ? 2 : !ALPHA_ORCHESTRATION_ENABLED ? 3 : 0);
   `;
   let out = '';
   try {
@@ -264,7 +268,7 @@ if (!appConfig.ALPHA_CLOUD_API) {
     fs.rmSync(scratch, { recursive: true, force: true });
   }
   const result = JSON.parse(out.trim().split('\n').pop());
-  console.log(`runtime check:   Electron Node ${result.node}, team board ${result.wanted ? (result.on ? 'connects' : 'FAILS') : 'not configured'}`);
+  console.log(`runtime check:   Electron Node ${result.node}, team board ${result.wanted ? (result.on ? 'connects' : 'FAILS') : 'not configured'}, orchestrator ${result.orchestratorEnabled ? 'enabled' : 'FAILS'}`);
 }
 
 /**

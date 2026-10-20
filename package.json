@@ -1,7 +1,7 @@
 {
   "name": "alpha-desktop",
-  "version": "2.0.31",
-  "description": "Alpha — AI work, coordinated. Desktop application.",
+  "version": "2.0.32",
+  "description": "Alpha — AI work, orchestrated. Desktop application.",
   "main": "main.js",
   "author": "Alpha",
   "license": "UNLICENSED",
