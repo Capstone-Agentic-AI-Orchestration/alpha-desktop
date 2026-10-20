@@ -47,7 +47,7 @@ const PUBLIC_SETTINGS = [
   'ALPHA_CLOUD_API',
   'SUPABASE_URL',
   'SUPABASE_ANON_KEY',
-  // Available by default on desktop; each project keeps its own opt-in.
+  // Required for all desktop project builds.
   'ALPHA_ORCHESTRATION_ENABLED',
   // The CI template repository and ref: a desktop scaffolds repositories too.
   'ALPHAORCH_WORKFLOW_REPO',
