@@ -93,6 +93,8 @@
     },
     "publish": {
       "provider": "github",
+      "owner": "Capstone-Agentic-AI-Orchestration",
+      "repo": "alpha-desktop",
       "private": true,
       "releaseType": "release"
     }
