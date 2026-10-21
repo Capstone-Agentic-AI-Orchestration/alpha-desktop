@@ -19,7 +19,12 @@ import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { pipeline } from 'node:stream/promises';
+
+const here = path.dirname(fileURLToPath(import.meta.url));
+const bundledGh = path.resolve(here, '..', 'vendor', 'gh', 'gh.exe');
+const gh = fs.existsSync(bundledGh) ? bundledGh : 'gh';
 
 const sha256 = async (file) => {
   const hash = createHash('sha256');
@@ -93,7 +98,7 @@ export async function publishReleaseNotes({ desktop, version, tag, repo, token }
 
   const notesFile = path.join(releaseDir, 'release-notes.md');
   fs.writeFileSync(notesFile, notes);
-  execFileSync('gh', ['release', 'edit', tag, '--repo', repo, '--notes-file', notesFile], {
+  execFileSync(gh, ['release', 'edit', tag, '--repo', repo, '--notes-file', notesFile], {
     windowsHide: true,
     env: { ...process.env, GH_TOKEN: token }
   });
