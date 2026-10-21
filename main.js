@@ -31,14 +31,49 @@ if (!electron || typeof electron === 'string' || !electron.app) {
 const { app, BrowserWindow, dialog, ipcMain, shell, Menu, safeStorage } = electron;
 
 /**
+ * GPU drawing on Windows, with a software fallback only where it is needed.
+ *
  * Some Windows GPU/driver combinations crash Chromium before Electron can
- * create the window or start Alpha's in-process API. That leaves the browser
- * renderer talking to a dead 43117 daemon and surfaces as a misleading 502.
- * Alpha's UI is deliberately lightweight, so a stable software compositor is
- * preferable to failing the whole desktop app. Keep hardware acceleration on
- * other platforms where this Windows-specific failure does not apply.
+ * create the window or start Alpha's in-process API. Software compositing was
+ * therefore forced on every Windows machine -- and on a large high-DPI screen
+ * that made every animated frame cost about 130 ms in the browser's compositor,
+ * which is the lag people felt when the navigation panel opened on hover.
+ *
+ * So the GPU is used by default, and software compositing is chosen when:
+ *   - ALPHA_DISABLE_GPU=1 is set, or
+ *   - the GPU process crashed on this machine before (remembered in
+ *     gpu-state.json under the app's user data folder), or
+ *   - the previous launch never got as far as showing its window, which is
+ *     what the startup crash looked like.
+ * Delete gpu-state.json to try the GPU again after a driver update.
  */
-if (process.platform === 'win32') {
+const GPU_STATE_FILE = path.join(app.getPath('userData'), 'gpu-state.json');
+
+function readGpuState() {
+  try {
+    return JSON.parse(fs.readFileSync(GPU_STATE_FILE, 'utf8')) || {};
+  } catch {
+    return {};
+  }
+}
+
+function writeGpuState(state) {
+  try {
+    fs.mkdirSync(path.dirname(GPU_STATE_FILE), { recursive: true });
+    fs.writeFileSync(GPU_STATE_FILE, JSON.stringify({ ...state, updatedAt: new Date().toISOString() }));
+  } catch {
+    // Losing this record only means the next launch decides again.
+  }
+}
+
+const previousGpuState = readGpuState();
+const useSoftwareCompositing = process.platform === 'win32' && (
+  process.env.ALPHA_DISABLE_GPU === '1' ||
+  previousGpuState.mode === 'software' ||
+  previousGpuState.launching === true
+);
+
+if (useSoftwareCompositing) {
   app.disableHardwareAcceleration();
   // Electron 33 can still spin up a GPU helper before the first window on
   // machines whose ANGLE/driver DLLs are unavailable. These switches make the
@@ -47,6 +82,34 @@ if (process.platform === 'win32') {
   app.commandLine.appendSwitch('disable-gpu-compositing');
   app.commandLine.appendSwitch('in-process-gpu');
   app.commandLine.appendSwitch('use-angle', 'swiftshader');
+} else if (process.platform === 'win32') {
+  app.on('child-process-gone', (_event, details) => {
+    if (details.type === 'GPU' && ['crashed', 'launch-failed', 'abnormal-exit', 'oom'].includes(details.reason)) {
+      // Chromium falls back on its own for this session; remember it for the next.
+      writeGpuState({ mode: 'software', reason: `GPU process ${details.reason}` });
+    }
+  });
+}
+
+/**
+ * Record this launch's GPU decision -- only from the instance that owns the
+ * window. A second launch that merely hands focus to the running app quits
+ * before showing anything, and must not be mistaken for a crashed startup.
+ */
+function recordGpuLaunch() {
+  if (process.platform !== 'win32') return;
+  if (useSoftwareCompositing) {
+    if (previousGpuState.mode !== 'software') {
+      writeGpuState({
+        mode: 'software',
+        reason: process.env.ALPHA_DISABLE_GPU === '1' ? 'ALPHA_DISABLE_GPU' : 'previous launch did not finish starting'
+      });
+    }
+    return;
+  }
+  // Cleared once the window is on screen. If this launch dies first, the next
+  // one starts in software mode instead of crashing the same way.
+  writeGpuState({ mode: previousGpuState.mode ?? 'hardware', launching: true });
 }
 
 /**
@@ -91,6 +154,7 @@ const focusMainWindow = () => {
 if (!gotSingleInstanceLock) {
   app.quit();
 } else {
+  recordGpuLaunch();
   app.on('second-instance', focusMainWindow);
 }
 
@@ -522,6 +586,21 @@ function createWindow() {
     // above the Alpha workspace.
     autoHideMenuBar: true,
     title: 'Alpha',
+    /**
+     * No native title bar on Windows.
+     *
+     * It only repeated the page title ("Alpha — AI work, orchestrated") above
+     * a workspace that already has its own toolbar. Windows still draws the
+     * minimize, maximize and close buttons over the top-right corner, in the
+     * workspace colour; the renderer leaves room for them and marks its
+     * toolbar as the area that moves the window (see App.tsx, index.css).
+     */
+    ...(process.platform === 'win32'
+      ? {
+          titleBarStyle: 'hidden',
+          titleBarOverlay: { color: '#0D0D11', symbolColor: '#A1A1AA', height: 40 }
+        }
+      : {}),
     // Windows takes the taskbar icon from the packaged .exe, so this matters
     // when running from source -- without it a developer's window is the
     // default Electron circle while everyone else's is the product.
@@ -543,9 +622,15 @@ function createWindow() {
     }
   });
   mainWindow.setMenuBarVisibility(false);
+  // Keep the window named "Alpha" for the taskbar and Alt+Tab, rather than
+  // adopting the web page's longer <title>.
+  mainWindow.on('page-title-updated', event => event.preventDefault());
 
   mainWindow.once('ready-to-show', () => {
     mainWindow.show();
+    if (process.platform === 'win32' && !useSoftwareCompositing && readGpuState().mode !== 'software') {
+      writeGpuState({ mode: 'hardware', launching: false });
+    }
     if (focusWhenReady) {
       focusWhenReady = false;
       mainWindow.focus();
