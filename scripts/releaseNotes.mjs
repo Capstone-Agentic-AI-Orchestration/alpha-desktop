@@ -93,7 +93,9 @@ export async function publishReleaseNotes({ desktop, version, tag, repo, token }
 
   const notesFile = path.join(releaseDir, 'release-notes.md');
   fs.writeFileSync(notesFile, notes);
-  execFileSync('gh', ['release', 'edit', tag, '--repo', repo, '--notes-file', notesFile], {
+  const bundledGh = path.join(desktop, 'vendor', 'gh', 'gh.exe');
+  const gh = fs.existsSync(bundledGh) ? bundledGh : 'gh';
+  execFileSync(gh, ['release', 'edit', tag, '--repo', repo, '--notes-file', notesFile], {
     windowsHide: true,
     env: { ...process.env, GH_TOKEN: token }
   });
