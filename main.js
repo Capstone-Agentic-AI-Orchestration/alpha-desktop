@@ -501,9 +501,8 @@ ipcMain.handle('alpha:check-for-updates', async () => {
   }
   try {
     const result = await updater.checkForUpdates();
-    const available = result?.updateInfo?.version;
-    return available && available !== app.getVersion()
-      ? { status: 'downloading', version: available }
+    return result?.isUpdateAvailable
+      ? { status: 'downloading', version: result.updateInfo.version }
       : { status: 'current', version: app.getVersion() };
   } catch (err) {
     return { status: 'error', message: err?.message ? String(err.message) : String(err) };
