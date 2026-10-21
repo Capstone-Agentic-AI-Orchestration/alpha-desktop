@@ -100,6 +100,44 @@ const repo = (() => {
  */
 const git = (args) => execFileSync('git', args, { cwd: desktop, windowsHide: true }).toString().trim();
 const branch = git(['branch', '--show-current']);
+const requiredSourceBranch = process.env.ALPHA_RELEASE_SOURCE_BRANCH?.trim();
+for (const source of [
+  { name: 'frontend', cwd: path.resolve(desktop, '..', 'alpha-fe-main') },
+  { name: 'backend', cwd: path.resolve(desktop, '..', 'alpha-be-main') }
+]) {
+  const sourceGit = (args) => execFileSync('git', args, { cwd: source.cwd, windowsHide: true }).toString().trim();
+  let sourceBranch;
+  let sourceCommit;
+  let remoteCommit;
+  try {
+    sourceBranch = sourceGit(['branch', '--show-current']);
+    sourceCommit = sourceGit(['rev-parse', 'HEAD']);
+    const sourceChanges = sourceGit(['status', '--porcelain', '--untracked-files=all'])
+      .split(/\r?\n/).filter(Boolean);
+    const uncommittedBuildInputs = sourceChanges.filter(line => {
+      const state = line.slice(0, 2);
+      const file = line.slice(3).replace(/\\/g, '/');
+      // The frontend workspace keeps generated design-audit reports here;
+      // Vite builds only its configured source/public inputs, so retain them
+      // locally without treating them as release source changes.
+      return !(source.name === 'frontend' && state === '??' && file.startsWith('artifacts/ui-review/'));
+    });
+    if (uncommittedBuildInputs.length) {
+      die(`Commit the ${source.name} source checkout before packaging. The release must use a reviewable source commit.`);
+    }
+    if (requiredSourceBranch && sourceBranch !== requiredSourceBranch) {
+      die(`The ${source.name} source checkout is on ${sourceBranch || '(detached HEAD)'}, but this release requires ${requiredSourceBranch}.`);
+    }
+    const remoteLine = sourceGit(['ls-remote', '--heads', 'origin', `refs/heads/${sourceBranch}`]).split(/\s+/);
+    remoteCommit = remoteLine[0] ?? '';
+  } catch (error) {
+    die(`Could not verify the ${source.name} source checkout and its pushed branch: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  if (!sourceBranch || !remoteCommit || remoteCommit !== sourceCommit) {
+    die(`Push the ${source.name} source branch at ${sourceCommit} before packaging. The release will not use an unpushed or detached source commit.`);
+  }
+  say(`Source ${source.name}: ${sourceBranch} @ ${sourceCommit}`);
+}
 const defaultBranch = (() => {
   try { return git(['symbolic-ref', '--quiet', '--short', 'refs/remotes/origin/HEAD']).replace(/^origin\//, ''); }
   catch { return ''; }
