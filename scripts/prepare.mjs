@@ -110,6 +110,22 @@ if (!fs.existsSync(path.join(feDist, 'index.html'))) {
   throw new Error('Frontend build produced no index.html');
 }
 
+// A stale sibling checkout can build and package successfully while silently
+// omitting the current project workspace UI. Fail packaging before it ships.
+const internalAppBundles = fs.readdirSync(path.join(feDist, 'assets'))
+  .filter(file => /^InternalApp-.*\.js$/.test(file));
+if (internalAppBundles.length !== 1) {
+  throw new Error(`Expected one built Alpha renderer bundle, found ${internalAppBundles.length}`);
+}
+const rendererBundle = fs.readFileSync(path.join(feDist, 'assets', internalAppBundles[0]), 'utf8');
+if (!rendererBundle.includes('projects.workspaceTab:')
+  || !rendererBundle.includes('Project sections')
+  || rendererBundle.includes('Open repository & pipeline')) {
+  throw new Error(
+    'The frontend build is missing the project workspace tabs. Refresh alpha-fe-main to the merged desktop UI before packaging.'
+  );
+}
+
 // 3. Backend — compiles to CommonJS, which the Electron main process requires
 run('npm run build', BE);
 const beDist = path.join(BE, 'dist');
