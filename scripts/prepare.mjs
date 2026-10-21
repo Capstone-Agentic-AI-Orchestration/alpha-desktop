@@ -49,6 +49,12 @@ const PUBLIC_SETTINGS = [
   'SUPABASE_ANON_KEY',
   // Required for all desktop project builds.
   'ALPHA_ORCHESTRATION_ENABLED',
+  // Recovery guards shared by packaged and source-run desktop builds.
+  'ALPHA_ORCHESTRATION_TRANSPORT_RETRIES',
+  'ALPHA_ORCHESTRATION_MAX_TOKENS',
+  'ALPHA_ORCHESTRATION_MAX_COST_USD',
+  'ALPHA_ORCHESTRATION_MAX_BUILD_AGE_HOURS',
+  'ALPHA_ORCHESTRATION_RECOVERY_WINDOW_MINUTES',
   // The CI template repository and ref: a desktop scaffolds repositories too.
   'ALPHAORCH_WORKFLOW_REPO',
   'ALPHAORCH_WORKFLOW_REF'
