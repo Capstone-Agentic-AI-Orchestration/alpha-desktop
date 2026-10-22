@@ -6,10 +6,10 @@
  * time, forever -- which is where this project has been: auto-update fully
  * wired and never able to fire.
  *
- * `electron-builder --publish always` does the upload, including `latest.yml`,
- * which is the file the updater actually reads to learn a newer version is
- * out. Attaching the installer by hand and forgetting that file is the usual
- * way a release looks published and updates nobody.
+ * `electron-builder --publish always` uploads the installer and `latest.yml`,
+ * which the updater reads to learn about the new version. Keep the GitHub
+ * release in draft until every asset has arrived: otherwise the updater can
+ * see the release during the short gap before `latest.yml` is uploaded.
  *
  * The token comes from `gh`, the same login the rest of Alpha uses on a
  * desktop, so there is no second credential to keep anywhere.
@@ -219,21 +219,53 @@ if (!remoteTagCommit) {
 }
 say(`Release tag ${tag} points to ${branch} at ${headCommit}.`);
 
+if (!existing) {
+  execFileSync(gh, [
+    'release', 'create', tag, '--repo', repo, '--draft', '--verify-tag',
+    '--title', pkg.version, '--notes', `Alpha Desktop ${pkg.version}`
+  ], { cwd: desktop, stdio: 'inherit', windowsHide: true, env: { ...process.env, GH_TOKEN: token } });
+}
+say(`Uploading ${tag} assets to a draft release.`);
+
 execSync('npx electron-builder --win --publish always', {
   cwd: desktop,
   stdio: 'inherit',
   env: { ...process.env, GH_TOKEN: token, ALPHA_ORCHESTRATION_ENABLED: '1' }
 });
 
-say(`\nPublished ${tag}.`);
-say('Installed copies will offer it on their next check (on launch, and every six hours).');
-say(`Release page: https://github.com/${repo}/releases/tag/${tag}`);
+const releaseInfo = JSON.parse(execFileSync(gh, [
+  'release', 'view', tag, '--repo', repo, '--json', 'isDraft,assets'
+], { cwd: desktop, windowsHide: true, env: { ...process.env, GH_TOKEN: token } }).toString());
+if (!releaseInfo.isDraft) die(`${tag} became public before its assets were verified.`);
+const expectedAssets = [
+  `Alpha-Setup-${pkg.version}.exe`,
+  `Alpha-Setup-${pkg.version}.exe.blockmap`,
+  `Alpha-Portable-${pkg.version}.exe`,
+  'latest.yml'
+];
+const releaseDir = path.join(desktop, 'release');
+const missingAssets = expectedAssets.filter(name =>
+  !fs.existsSync(path.join(releaseDir, name)) ||
+  !releaseInfo.assets.some(asset => asset.name === name && asset.state === 'uploaded')
+);
+if (missingAssets.length) {
+  die(`${tag} remains a draft because these release assets are missing: ${missingAssets.join(', ')}`);
+}
+const updateInfo = fs.readFileSync(path.join(releaseDir, 'latest.yml'), 'utf8');
+if (!updateInfo.includes(`version: ${pkg.version}`) || !updateInfo.includes(`Alpha-Setup-${pkg.version}.exe`)) {
+  die(`${tag} remains a draft because latest.yml does not describe this installer and version.`);
+}
 
 try {
   const count = await publishReleaseNotes({ desktop, version: pkg.version, tag, repo, token });
   say(`Release notes written, with ${count} checksum(s).`);
 } catch (err) {
-  // The release is published and working by now; notes are not worth failing
-  // it over, and the reason is more useful than a stack trace.
-  say(`The release is published, but its notes could not be written: ${err.message}`);
+  say(`Release notes could not be written: ${err.message}`);
 }
+
+execFileSync(gh, ['release', 'edit', tag, '--repo', repo, '--draft=false'], {
+  cwd: desktop, stdio: 'inherit', windowsHide: true, env: { ...process.env, GH_TOKEN: token }
+});
+say(`\nPublished ${tag} after verifying all update assets.`);
+say('Installed copies will offer it on their next check (on launch, and every six hours).');
+say(`Release page: https://github.com/${repo}/releases/tag/${tag}`);
