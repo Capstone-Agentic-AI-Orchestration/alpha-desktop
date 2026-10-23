@@ -102,8 +102,9 @@ const git = (args) => execFileSync('git', args, { cwd: desktop, windowsHide: tru
 const branch = git(['branch', '--show-current']);
 const requiredSourceBranch = process.env.ALPHA_RELEASE_SOURCE_BRANCH?.trim();
 for (const source of [
-  { name: 'frontend', cwd: path.resolve(desktop, '..', 'alpha-fe-main') },
-  { name: 'backend', cwd: path.resolve(desktop, '..', 'alpha-be-main') }
+  // The same folders prepare.mjs builds from, so the checked commit is the shipped one.
+  { name: 'frontend', cwd: path.resolve(process.env.ALPHA_FE_DIR || path.resolve(desktop, '..', 'alpha-fe-main')) },
+  { name: 'backend', cwd: path.resolve(process.env.ALPHA_BE_DIR || path.resolve(desktop, '..', 'alpha-be-main')) }
 ]) {
   const sourceGit = (args) => execFileSync('git', args, { cwd: source.cwd, windowsHide: true }).toString().trim();
   let sourceBranch;
