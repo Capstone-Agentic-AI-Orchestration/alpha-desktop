@@ -19,8 +19,8 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const desktop = path.resolve(here, '..');
 const root = path.resolve(desktop, '..');
 
-const FE = path.join(root, 'alpha-fe-main');
-const BE = path.join(root, 'alpha-be-main');
+const FE = path.resolve(process.env.ALPHA_FE_DIR || path.join(root, 'alpha-fe-main'));
+const BE = path.resolve(process.env.ALPHA_BE_DIR || path.join(root, 'alpha-be-main'));
 const OUT = path.join(desktop, 'build');
 
 // A fallback for the renderer. Packaged launches receive their actual
@@ -176,7 +176,7 @@ for (const key of PUBLIC_SETTINGS) {
 if (!appConfig.ALPHA_ORG) {
   throw new Error(
     'ALPHA_ORG is not set, and the app would refuse to start without it. Set it ' +
-      'in the build environment, or in alpha-be-main/.env for a local build.'
+      'in the build environment, or in the selected backend .env for a local build.'
   );
 }
 
