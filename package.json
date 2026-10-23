@@ -1,7 +1,7 @@
 {
   "name": "alpha-desktop",
-  "version": "2.0.19",
-  "description": "Alpha — AI work, coordinated. Desktop application.",
+  "version": "2.0.58",
+  "description": "Alpha — AI work, orchestrated. Desktop application.",
   "main": "main.js",
   "author": "Alpha",
   "license": "UNLICENSED",
@@ -93,6 +93,8 @@
     },
     "publish": {
       "provider": "github",
+      "owner": "Capstone-Agentic-AI-Orchestration",
+      "repo": "alpha-desktop",
       "private": true,
       "releaseType": "release"
     }

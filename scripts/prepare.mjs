@@ -47,6 +47,13 @@ const PUBLIC_SETTINGS = [
   'ALPHA_CLOUD_API',
   'SUPABASE_URL',
   'SUPABASE_ANON_KEY',
+  // Required for all desktop project builds.
+  'ALPHA_ORCHESTRATION_ENABLED',
+  // Recovery guards shared by packaged and source-run desktop builds.
+  'ALPHA_ORCHESTRATION_TRANSPORT_RETRIES',
+  'ALPHA_ORCHESTRATION_MAX_TOKENS',
+  'ALPHA_ORCHESTRATION_MAX_COST_USD',
+  'ALPHA_ORCHESTRATION_MAX_BUILD_AGE_HOURS',
   // The CI template repository and ref: a desktop scaffolds repositories too.
   'ALPHAORCH_WORKFLOW_REPO',
   'ALPHAORCH_WORKFLOW_REF'
@@ -108,6 +115,22 @@ if (!fs.existsSync(path.join(feDist, 'index.html'))) {
   throw new Error('Frontend build produced no index.html');
 }
 
+// A stale sibling checkout can build and package successfully while silently
+// omitting the current project workspace UI. Fail packaging before it ships.
+const internalAppBundles = fs.readdirSync(path.join(feDist, 'assets'))
+  .filter(file => /^InternalApp-.*\.js$/.test(file));
+if (internalAppBundles.length !== 1) {
+  throw new Error(`Expected one built Alpha renderer bundle, found ${internalAppBundles.length}`);
+}
+const rendererBundle = fs.readFileSync(path.join(feDist, 'assets', internalAppBundles[0]), 'utf8');
+if (!rendererBundle.includes('projects.workspaceTab:')
+  || !rendererBundle.includes('Project sections')
+  || rendererBundle.includes('Open repository & pipeline')) {
+  throw new Error(
+    'The frontend build is missing the project workspace tabs. Refresh alpha-fe-main to the merged desktop UI before packaging.'
+  );
+}
+
 // 3. Backend — compiles to CommonJS, which the Electron main process requires
 run('npm run build', BE);
 const beDist = path.join(BE, 'dist');
@@ -128,14 +151,25 @@ const count = dir =>
 console.log(`\nstaged renderer: ${count(path.join(OUT, 'renderer'))} files`);
 console.log(`staged server:   ${count(path.join(OUT, 'server'))} files`);
 
-// 5. Deployment settings, from the build's environment, falling back to the
-//    builder's own backend .env for a local `npm start`.
-const localEnvFile = path.resolve(process.env.ALPHA_DESKTOP_CONFIG_ENV || path.join(BE, '.env'));
+// 5. Deployment settings. Explicit build environment values win, then the
+//    builder's backend .env, then the current staged public settings. Keeping
+//    that fallback lets a local app start reuse its existing configuration.
+const localEnvFile = path.join(BE, '.env');
 const localEnv = fs.existsSync(localEnvFile) ? dotenv.parse(fs.readFileSync(localEnvFile)) : {};
+const stagedConfigFile = path.join(OUT, 'app-config.json');
+let stagedConfig = {};
+if (fs.existsSync(stagedConfigFile)) {
+  try {
+    stagedConfig = JSON.parse(fs.readFileSync(stagedConfigFile, 'utf8'));
+  } catch (err) {
+    throw new Error('Could not read existing staged app-config.json: ' + (err?.message ?? err));
+  }
+}
 
 const appConfig = {};
 for (const key of PUBLIC_SETTINGS) {
-  const value = process.env[key] || localEnv[key];
+  const value = process.env[key] || localEnv[key] || stagedConfig[key] ||
+    (key === 'ALPHA_ORCHESTRATION_ENABLED' ? '1' : undefined);
   if (value) appConfig[key] = value;
 }
 
@@ -159,9 +193,14 @@ if (!appConfig.ALPHA_ORG) {
  * A refusal stops the build. Not reaching Supabase at all only warns, so an
  * offline source build still works; do not publish one of those.
  */
+const requireVerifiedSupabase = process.env.ALPHA_REQUIRE_SUPABASE_VERIFY === '1';
+if (requireVerifiedSupabase && (!appConfig.SUPABASE_URL || !appConfig.SUPABASE_ANON_KEY)) {
+  throw new Error('A desktop release needs both SUPABASE_URL and SUPABASE_ANON_KEY so the team board can be verified.');
+}
 if (appConfig.SUPABASE_URL && appConfig.SUPABASE_ANON_KEY) {
   const probe = new URL('/auth/v1/settings', appConfig.SUPABASE_URL);
   let status;
+  let probeError;
   try {
     const res = await fetch(probe, {
       headers: { apikey: appConfig.SUPABASE_ANON_KEY },
@@ -169,6 +208,7 @@ if (appConfig.SUPABASE_URL && appConfig.SUPABASE_ANON_KEY) {
     });
     status = res.status;
   } catch (err) {
+    probeError = err;
     console.warn(
       `\nWarning — could not reach ${probe.origin} to check SUPABASE_ANON_KEY (${err?.message ?? err}).\n` +
       'The key is unverified. Do not publish this build.'
@@ -184,6 +224,12 @@ if (appConfig.SUPABASE_URL && appConfig.SUPABASE_ANON_KEY) {
   }
   if (status !== undefined && status !== 200) {
     console.warn(`\nWarning — ${probe.origin} answered HTTP ${status} when checking SUPABASE_ANON_KEY.`);
+  }
+  if (requireVerifiedSupabase && status !== 200) {
+    throw new Error(
+      `The release build could not verify SUPABASE_ANON_KEY${status === undefined ? ` because ${probeError?.message ?? 'the Supabase check did not complete'}` : ` (HTTP ${status})`}. ` +
+      'The live-test installer was not published.'
+    );
   }
   if (status === 200) console.log('supabase key:    accepted by the project');
 }
@@ -232,9 +278,10 @@ if (!appConfig.ALPHA_CLOUD_API) {
     require('${server}/controllers/workspaceController.js');
     const wanted = Boolean(process.env.SUPABASE_URL && process.env.SUPABASE_ANON_KEY);
     const on = supabaseService.sharesBoard();
-    console.log(JSON.stringify({ node: process.versions.node, wanted, on,
+    const { ALPHA_ORCHESTRATION_ENABLED } = require('${server}/config/env.js');
+    console.log(JSON.stringify({ node: process.versions.node, wanted, on, orchestratorEnabled: ALPHA_ORCHESTRATION_ENABLED,
       problem: typeof supabaseService.connectionProblem === 'function' ? supabaseService.connectionProblem() : null }));
-    process.exit(wanted && !on ? 2 : 0);
+    process.exit(wanted && !on ? 2 : !ALPHA_ORCHESTRATION_ENABLED ? 3 : 0);
   `;
   let out = '';
   try {
@@ -254,7 +301,7 @@ if (!appConfig.ALPHA_CLOUD_API) {
     fs.rmSync(scratch, { recursive: true, force: true });
   }
   const result = JSON.parse(out.trim().split('\n').pop());
-  console.log(`runtime check:   Electron Node ${result.node}, team board ${result.wanted ? (result.on ? 'connects' : 'FAILS') : 'not configured'}`);
+  console.log(`runtime check:   Electron Node ${result.node}, team board ${result.wanted ? (result.on ? 'connects' : 'FAILS') : 'not configured'}, orchestrator ${result.orchestratorEnabled ? 'enabled' : 'FAILS'}`);
 }
 
 /**
