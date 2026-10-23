@@ -47,5 +47,14 @@ contextBridge.exposeInMainWorld('alphaDesktop', {
    * and no URL. Main decides all of that from what was baked into the build.
    */
   checkForUpdates: () => ipcRenderer.invoke('alpha:check-for-updates'),
-  appVersion: () => ipcRenderer.invoke('alpha:app-version')
+  appVersion: () => ipcRenderer.invoke('alpha:app-version'),
+  /**
+   * The native "choose a folder" dialog, for cloning a project's repositories.
+   *
+   * The renderer can only ask; the person picks. It names no path, and gets back
+   * only the folder chosen, or null when the dialog is cancelled. A browser
+   * folder input could not do this: it reports files, so an empty folder, the
+   * usual place to clone into, came back as nothing.
+   */
+  selectFolder: () => ipcRenderer.invoke('alpha:select-folder')
 });

@@ -551,6 +551,18 @@ function startUpdateChecks(window) {
  */
 ipcMain.handle('alpha:app-version', () => app.getVersion());
 
+/** The native folder picker behind alphaDesktop.selectFolder: the chosen folder, or null if cancelled. */
+ipcMain.handle('alpha:select-folder', async event => {
+  const owner = BrowserWindow.fromWebContents(event.sender);
+  const options = {
+    title: 'Choose a folder',
+    buttonLabel: 'Choose folder',
+    properties: ['openDirectory', 'createDirectory', 'promptToCreate']
+  };
+  const result = owner ? await dialog.showOpenDialog(owner, options) : await dialog.showOpenDialog(options);
+  return result.canceled ? null : result.filePaths[0] ?? null;
+});
+
 ipcMain.handle('alpha:check-for-updates', async () => {
   if (!app.isPackaged) {
     return { status: 'unsupported', reason: 'Updates apply to the installed app, not one run from source.' };
