@@ -1,6 +1,21 @@
 'use strict';
 
 const { contextBridge, ipcRenderer } = require('electron');
+const { SET_THEME_CHANNEL, THEME_CHANGED_CHANNEL, BOOTSTRAP_THEME_CHANNEL } = require('./appearance.cjs');
+const validThemeId = id => typeof id === 'string' && id.length <= 64
+  && /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/.test(id) && !['constructor', 'prototype', '__proto__'].includes(id);
+function initialAppearanceThemeId() {
+  // additionalArguments survive reloads unchanged. Read main's current cached
+  // selection synchronously before exposing the bridge or running page scripts.
+  try {
+    const current = ipcRenderer.sendSync(BOOTSTRAP_THEME_CHANNEL);
+    if (validThemeId(current)) return current;
+  } catch {
+    // Retain the startup argument fallback when bootstrap is unavailable.
+  }
+  const startup = process.argv.find(argument => argument.startsWith('--alpha-theme='))?.slice('--alpha-theme='.length);
+  return validThemeId(startup) ? startup : undefined;
+}
 
 function runtimeArgument(prefix) {
   const value = process.argv.find(argument => argument.startsWith(prefix))?.slice(prefix.length);
@@ -34,6 +49,14 @@ contextBridge.exposeInMainWorld('alphaDesktop', {
   platform: process.platform,
   apiBase: runtimeArgument('--alpha-api-base='),
   wsUrl: runtimeArgument('--alpha-ws-url='),
+  appearanceThemeId: initialAppearanceThemeId(),
+  setAppearanceTheme: id => ipcRenderer.invoke(SET_THEME_CHANNEL, id),
+  onAppearanceThemeChanged: listener => {
+    if (typeof listener !== 'function') throw new TypeError('Appearance listener must be a function.');
+    const handler = (_event, id) => { if (typeof id === 'string') listener(id); };
+    ipcRenderer.on(THEME_CHANGED_CHANNEL, handler);
+    return () => ipcRenderer.removeListener(THEME_CHANGED_CHANNEL, handler);
+  },
   versions: {
     electron: process.versions.electron,
     node: process.versions.node,
