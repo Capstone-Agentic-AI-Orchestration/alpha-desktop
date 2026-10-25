@@ -130,6 +130,8 @@ function recordGpuLaunch() {
 const { HOST, PORT: BUILD_PORT } = require('./desktop-address.cjs');
 
 let mainWindow = null;
+let previewSurface;
+let previewService;
 let focusWhenReady = false;
 let PORT = BUILD_PORT;
 
@@ -271,6 +273,7 @@ async function startBackend() {
   };
 
   const backend = require(path.join(__dirname, 'build', 'server', 'index.js'));
+  previewService = require(path.join(__dirname, 'build', 'server', 'services', 'localPreviewService.js')).localPreviewService;
   if (!backend.server || typeof backend.server.listen !== 'function') {
     throw new Error('The local engine did not expose its listener to the desktop shell.');
   }
@@ -550,6 +553,10 @@ function startUpdateChecks(window) {
  * 2.0.1 shipped and would have stayed wrong forever.
  */
 ipcMain.handle('alpha:app-version', () => app.getVersion());
+ipcMain.handle('alpha:local-preview', (event, action, value) => {
+  if (!previewSurface) throw new Error('Local preview surface is unavailable.');
+  return previewSurface.handle(event, action, value);
+});
 
 /** The native folder picker behind alphaDesktop.selectFolder: the chosen folder, or null if cancelled. */
 ipcMain.handle('alpha:select-folder', async event => {
@@ -634,6 +641,7 @@ function createWindow() {
     }
   });
   mainWindow.setMenuBarVisibility(false);
+  previewSurface = require('./local-preview-view.cjs').createPreviewSurface({ electron, window: mainWindow, service: previewService });
   // Keep the window named "Alpha" for the taskbar and Alt+Tab, rather than
   // adopting the web page's longer <title>.
   mainWindow.on('page-title-updated', event => event.preventDefault());
@@ -726,4 +734,13 @@ app.on('window-all-closed', () => {
   // running with no window would keep a hidden server (and any agent it
   // spawned) alive.
   app.quit();
+});
+
+let previewShutdown = false;
+app.on('before-quit', event => {
+  if (!previewService || previewShutdown) return;
+  event.preventDefault();
+  previewShutdown = true;
+  previewSurface?.detach();
+  previewService.shutdown().catch(error => console.error('Preview shutdown:', error.message)).finally(() => app.quit());
 });

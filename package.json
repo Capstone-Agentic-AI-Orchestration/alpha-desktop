@@ -49,6 +49,7 @@
       "main.js",
       "preload.js",
       "desktop-address.cjs",
+      "local-preview-view.cjs",
       "assets/**/*",
       "build/**/*",
       "!**/*.map"

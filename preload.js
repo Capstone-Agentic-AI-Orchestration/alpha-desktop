@@ -48,6 +48,7 @@ contextBridge.exposeInMainWorld('alphaDesktop', {
    */
   checkForUpdates: () => ipcRenderer.invoke('alpha:check-for-updates'),
   appVersion: () => ipcRenderer.invoke('alpha:app-version'),
+  localPreview: (action, value) => ipcRenderer.invoke('alpha:local-preview', action, value),
   /**
    * The native "choose a folder" dialog, for cloning a project's repositories.
    *
