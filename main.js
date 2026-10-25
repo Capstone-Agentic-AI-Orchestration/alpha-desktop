@@ -128,8 +128,10 @@ function recordGpuLaunch() {
  */
 
 const { HOST, PORT: BUILD_PORT } = require('./desktop-address.cjs');
+const { createAppearance, SET_THEME_CHANNEL, BOOTSTRAP_THEME_CHANNEL } = require('./appearance.cjs');
 
 let mainWindow = null;
+let appearance;
 let previewSurface;
 let previewService;
 let focusWhenReady = false;
@@ -553,6 +555,21 @@ function startUpdateChecks(window) {
  * 2.0.1 shipped and would have stayed wrong forever.
  */
 ipcMain.handle('alpha:app-version', () => app.getVersion());
+ipcMain.on(BOOTSTRAP_THEME_CHANNEL, event => {
+  // Always answer synchronous IPC, including rejection, to avoid blocking the
+  // preload. Only a trusted Alpha main frame receives the cached ID.
+  let themeId = null;
+  try {
+    if (appearance) themeId = appearance.bootstrapThemeId(event);
+  } catch {
+    // Untrusted/closed/navigated contents receive no appearance state.
+  }
+  event.returnValue = themeId;
+});
+ipcMain.handle(SET_THEME_CHANNEL, (event, themeId) => {
+  if (!appearance) throw new Error('Appearance is unavailable.');
+  return appearance.setTheme(event, themeId);
+});
 ipcMain.handle('alpha:local-preview', (event, action, value) => {
   if (!previewSurface) throw new Error('Local preview surface is unavailable.');
   return previewSurface.handle(event, action, value);
@@ -598,7 +615,6 @@ function createWindow() {
     height: 900,
     minWidth: 1024,
     minHeight: 640,
-    backgroundColor: '#09090B',
     show: false,
     // The renderer owns the product navigation. Keep Electron's native menu
     // hidden so Windows does not add a second File/Edit/View/Window/Help bar
@@ -614,12 +630,7 @@ function createWindow() {
      * workspace colour; the renderer leaves room for them and marks its
      * toolbar as the area that moves the window (see App.tsx, index.css).
      */
-    ...(process.platform === 'win32'
-      ? {
-          titleBarStyle: 'hidden',
-          titleBarOverlay: { color: '#0D0D11', symbolColor: '#A1A1AA', height: 40 }
-        }
-      : {}),
+    ...appearance.windowOptions(),
     // Windows takes the taskbar icon from the packaged .exe, so this matters
     // when running from source -- without it a developer's window is the
     // default Electron circle while everyone else's is the product.
@@ -630,7 +641,8 @@ function createWindow() {
       // isolated renderer rather than baking a shared port into the installer.
       additionalArguments: [
         `--alpha-api-base=http://${HOST}:${PORT}/api`,
-        `--alpha-ws-url=ws://${HOST}:${PORT}`
+        `--alpha-ws-url=ws://${HOST}:${PORT}`,
+        appearance.startupArgument()
       ],
       // Non-negotiable: the renderer displays model-generated text and tool
       // output. With nodeIntegration on, any injected string in that output
@@ -640,6 +652,7 @@ function createWindow() {
       sandbox: false
     }
   });
+  appearance.addWindow(mainWindow);
   mainWindow.setMenuBarVisibility(false);
   previewSurface = require('./local-preview-view.cjs').createPreviewSurface({ electron, window: mainWindow, service: previewService });
   // Keep the window named "Alpha" for the taskbar and Alt+Tab, rather than
@@ -706,13 +719,17 @@ if (gotSingleInstanceLock) {
       // is a focused workspace app, so remove that Windows menu before creating
       // the first window instead of leaving an empty native chrome strip.
       Menu.setApplicationMenu(null);
+      appearance = createAppearance({
+        buildDir: path.join(__dirname, 'build'),
+        userDataDir: app.getPath('userData')
+      });
       await startBackend();
       await waitForBackend();
     } catch (err) {
       // Surface the reason instead of opening a window onto nothing.
       dialog.showErrorBox(
         'Alpha could not start',
-        `The local engine failed to start.\n\n${err && err.message ? err.message : String(err)}`
+        `Alpha startup failed.\n\n${err && err.message ? err.message : String(err)}`
       );
       app.quit();
       return;
