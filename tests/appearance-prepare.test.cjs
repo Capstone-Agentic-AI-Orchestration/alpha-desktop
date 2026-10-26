@@ -24,7 +24,7 @@ for (const mode of ['missing', 'mismatch', 'malformed', 'valid']) {
     for (const file of ['appearance.cjs', 'desktop-address.cjs']) {
       fs.copyFileSync(path.join(desktop, file), path.join(f.root, file));
     }
-    fs.writeFileSync(path.join(f.root, 'package.json'), JSON.stringify({ dependencies: {} }));
+    fs.writeFileSync(path.join(f.root, 'package.json'), JSON.stringify({ version: '2.0.67', dependencies: {} }));
     fs.writeFileSync(path.join(backend, 'package.json'), JSON.stringify({
       scripts: { build: 'node fail.cjs' }, dependencies: {}
     }));
@@ -37,6 +37,7 @@ for (const mode of ['missing', 'mismatch', 'malformed', 'valid']) {
       fs.mkdirSync('dist/assets', { recursive: true });
       fs.writeFileSync('dist/index.html', '<html>Alpha</html>');
       fs.writeFileSync('dist/assets/InternalApp-test.js', 'projects.workspaceTab: Project sections');
+      console.log('ALPHA_CLIENT_VERSION=' + process.env.VITE_ALPHA_CLIENT_VERSION);
       ${mode === 'missing' ? '' : `fs.writeFileSync('dist/theme-manifest.json', ${JSON.stringify(mode === 'malformed' ? '{}' : JSON.stringify(output))});`}
     `;
     fs.writeFileSync(path.join(f.frontend, 'build.cjs'), build);
@@ -48,6 +49,7 @@ for (const mode of ['missing', 'mismatch', 'malformed', 'valid']) {
     assert.equal(result.error, undefined);
     assert.notEqual(result.status, 0);
     const log = result.stdout + result.stderr;
+    assert.match(log, /ALPHA_CLIENT_VERSION=2\.0\.67/);
     if (mode === 'missing') assert.match(log, /Cannot load appearance manifest/);
     if (mode === 'mismatch') assert.match(log, /does not match the selected source/);
     if (mode === 'malformed') assert.match(log, /Invalid appearance manifest/);
