@@ -22,6 +22,10 @@ const root = path.resolve(desktop, '..');
 const FE = path.resolve(process.env.ALPHA_FE_DIR || path.join(root, 'alpha-fe-main'));
 const BE = path.resolve(process.env.ALPHA_BE_DIR || path.join(root, 'alpha-be-main'));
 const OUT = path.join(desktop, 'build');
+const desktopVersion = JSON.parse(fs.readFileSync(path.join(desktop, 'package.json'), 'utf8')).version;
+if (typeof desktopVersion !== 'string' || !desktopVersion.trim()) {
+  throw new Error('alpha-desktop/package.json must declare a version before building the renderer.');
+}
 const { verifyFrontendManifest, writeAppearanceReceipt } = createRequire(import.meta.url)('../appearance.cjs');
 // Invalidate staging before any build check can fail.
 fs.rmSync(path.join(OUT, 'appearance-build.json'), { force: true });
@@ -116,7 +120,11 @@ const feDist = path.join(FE, 'dist');
 // A failed/old build must not leave a reusable receipt or pass with an output
 // manifest left over from an earlier frontend build.
 fs.rmSync(path.join(feDist, 'theme-manifest.json'), { force: true });
-run('npm run build', FE, { VITE_API_URL: apiUrl, VITE_WS_URL: wsUrl });
+run('npm run build', FE, {
+  VITE_API_URL: apiUrl,
+  VITE_WS_URL: wsUrl,
+  VITE_ALPHA_CLIENT_VERSION: desktopVersion
+});
 verifyFrontendManifest(FE);
 if (!fs.existsSync(path.join(feDist, 'index.html'))) {
   throw new Error('Frontend build produced no index.html');
