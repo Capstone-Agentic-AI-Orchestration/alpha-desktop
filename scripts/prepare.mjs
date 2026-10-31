@@ -108,6 +108,38 @@ if (skewed.length) {
   console.warn(`\nWarning — dependency versions differ from the backend:\n${skewed.join('\n')}`);
 }
 
+// Resolve public configuration before Vite embeds it in the renderer.
+const localEnvFile = path.join(BE, '.env');
+const localEnv = fs.existsSync(localEnvFile) ? dotenv.parse(fs.readFileSync(localEnvFile)) : {};
+const stagedConfigFile = path.join(OUT, 'app-config.json');
+let stagedConfig = {};
+if (fs.existsSync(stagedConfigFile)) {
+  try {
+    stagedConfig = JSON.parse(fs.readFileSync(stagedConfigFile, 'utf8'));
+  } catch (err) {
+    throw new Error('Could not read existing staged app-config.json: ' + (err?.message ?? err));
+  }
+}
+
+const appConfig = {};
+for (const key of PUBLIC_SETTINGS) {
+  const value = process.env[key] || localEnv[key] || stagedConfig[key] ||
+    (key === 'ALPHA_ORCHESTRATION_ENABLED' ? '1' : undefined);
+  if (value) appConfig[key] = value;
+}
+
+// A mislabelled privileged key must never reach a renderer bundle or installer.
+if (appConfig.SUPABASE_ANON_KEY) {
+  const key = appConfig.SUPABASE_ANON_KEY;
+  let publicKey = key.startsWith('sb_publishable_');
+  if (!publicKey) {
+    try {
+      publicKey = JSON.parse(Buffer.from(key.split('.')[1], 'base64url').toString('utf8')).role === 'anon';
+    } catch { /* Invalid or private keys fail closed below. */ }
+  }
+  if (!publicKey) throw new Error('SUPABASE_ANON_KEY must be a public anon or publishable key. Refusing to bundle a private or invalid key.');
+}
+
 // 2. Frontend — must be built with base './' so assets resolve under file://.
 //    Pointed at this desktop's own daemon. The environment outranks the
 //    frontend's .env files in Vite, so a web-oriented .env.local cannot leak
@@ -116,7 +148,13 @@ const feDist = path.join(FE, 'dist');
 // A failed/old build must not leave a reusable receipt or pass with an output
 // manifest left over from an earlier frontend build.
 fs.rmSync(path.join(feDist, 'theme-manifest.json'), { force: true });
-run('npm run build', FE, { VITE_API_URL: apiUrl, VITE_WS_URL: wsUrl });
+run('npm run build', FE, {
+  VITE_API_URL: apiUrl,
+  VITE_WS_URL: wsUrl,
+  // Explicit empty values also override stale frontend .env files.
+  VITE_SUPABASE_URL: appConfig.SUPABASE_URL || '',
+  VITE_SUPABASE_ANON_KEY: appConfig.SUPABASE_ANON_KEY || ''
+});
 verifyFrontendManifest(FE);
 if (!fs.existsSync(path.join(feDist, 'index.html'))) {
   throw new Error('Frontend build produced no index.html');
@@ -159,27 +197,7 @@ const count = dir =>
 console.log(`\nstaged renderer: ${count(path.join(OUT, 'renderer'))} files`);
 console.log(`staged server:   ${count(path.join(OUT, 'server'))} files`);
 
-// 5. Deployment settings. Explicit build environment values win, then the
-//    builder's backend .env, then the current staged public settings. Keeping
-//    that fallback lets a local app start reuse its existing configuration.
-const localEnvFile = path.join(BE, '.env');
-const localEnv = fs.existsSync(localEnvFile) ? dotenv.parse(fs.readFileSync(localEnvFile)) : {};
-const stagedConfigFile = path.join(OUT, 'app-config.json');
-let stagedConfig = {};
-if (fs.existsSync(stagedConfigFile)) {
-  try {
-    stagedConfig = JSON.parse(fs.readFileSync(stagedConfigFile, 'utf8'));
-  } catch (err) {
-    throw new Error('Could not read existing staged app-config.json: ' + (err?.message ?? err));
-  }
-}
-
-const appConfig = {};
-for (const key of PUBLIC_SETTINGS) {
-  const value = process.env[key] || localEnv[key] || stagedConfig[key] ||
-    (key === 'ALPHA_ORCHESTRATION_ENABLED' ? '1' : undefined);
-  if (value) appConfig[key] = value;
-}
+// 5. Validate and stage the same public settings used to build the renderer.
 
 if (!appConfig.ALPHA_ORG) {
   throw new Error(
