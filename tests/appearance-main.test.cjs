@@ -59,6 +59,7 @@ async function boot(f) {
       if (name === 'node:crypto') return { ...require(name), randomUUID: () => 'test-instance' };
       if (name === './desktop-address.cjs') return { HOST: '127.0.0.1', PORT: 4000 };
       if (name === './appearance.cjs') return require('../appearance.cjs');
+      if (name === './local-access.cjs') return require('../local-access.cjs');
       if (name === './local-preview-view.cjs') return { createPreviewSurface: () => ({ handle() {} }) };
       if (name === path.join(f.root, 'build', 'server', 'index.js')) {
         backendStarts++;
@@ -140,11 +141,15 @@ test('main synchronous bootstrap returns cached ID before reload scripts and rej
           return request.returnValue;
         }
       }
-    } : require(name === './appearance.cjs' ? '../appearance.cjs' : name)
+    } : require(name.startsWith('./') ? '.' + name : name)
   });
   // No did-finish-load notification has fired. The public initial property is
   // already current despite the original alpha-violet additionalArgument.
   assert.equal(reloadBridge.appearanceThemeId, 'alpha-light');
+  // The engine token reaches the real window through IPC, never as an argument.
+  assert.match(reloadBridge.localToken, /^[0-9a-f]{64}$/);
+  assert.ok(!window.options.webPreferences.additionalArguments.some(arg => arg.includes(reloadBridge.localToken)));
+  const tokenRequest = result.listeners.get('alpha:local-token');
   const preview = fakeWindow(f.renderer);
   for (const invalid of [
     { sender: preview.webContents, senderFrame: preview.webContents.mainFrame },
@@ -153,11 +158,17 @@ test('main synchronous bootstrap returns cached ID before reload scripts and rej
   ]) {
     bootstrap(invalid);
     assert.equal(invalid.returnValue, null);
+    const asked = { ...invalid };
+    tokenRequest(asked);
+    assert.equal(asked.returnValue, null);
   }
   window.webContents.mainFrame.url = 'https://example.com/';
   const navigated = { ...sender };
   bootstrap(navigated);
   assert.equal(navigated.returnValue, null);
+  const navigatedToken = { ...sender };
+  tokenRequest(navigatedToken);
+  assert.equal(navigatedToken.returnValue, null);
   window.destroyed = true;
   const closed = { ...sender };
   bootstrap(closed);

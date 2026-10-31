@@ -12,13 +12,18 @@ function bridge(argv, bootstrap = () => null) {
   const ipcRenderer = new EventEmitter();
   const calls = [];
   const syncCalls = [];
-  ipcRenderer.sendSync = (...args) => { syncCalls.push(args); return bootstrap(...args); };
+  // The local-token request is a separate channel, covered in local-access tests.
+  ipcRenderer.sendSync = (...args) => {
+    if (args[0] !== BOOTSTRAP_THEME_CHANNEL) return null;
+    syncCalls.push(args);
+    return bootstrap(...args);
+  };
   ipcRenderer.invoke = async (...args) => { calls.push(args); return { themeId: args[1] }; };
   let api;
   vm.runInNewContext(fs.readFileSync(path.join(__dirname, '..', 'preload.js'), 'utf8'), {
     require: name => name === 'electron' ? {
       contextBridge: { exposeInMainWorld: (key, value) => { assert.equal(key, 'alphaDesktop'); api = value; } }, ipcRenderer
-    } : require(name === './appearance.cjs' ? '../appearance.cjs' : name),
+    } : require(name.startsWith('./') ? '.' + name : name),
     process: { argv, platform: 'win32', versions: {} }, URL
   });
   return { api, ipcRenderer, calls, syncCalls };

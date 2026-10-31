@@ -2,6 +2,7 @@
 
 const { contextBridge, ipcRenderer } = require('electron');
 const { SET_THEME_CHANNEL, THEME_CHANGED_CHANNEL, BOOTSTRAP_THEME_CHANNEL } = require('./appearance.cjs');
+const { LOCAL_TOKEN_CHANNEL, isLocalToken } = require('./local-access.cjs');
 const validThemeId = id => typeof id === 'string' && id.length <= 64
   && /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/.test(id) && !['constructor', 'prototype', '__proto__'].includes(id);
 function initialAppearanceThemeId() {
@@ -35,6 +36,19 @@ function runtimeArgument(prefix) {
 }
 
 /**
+ * The local engine's launch token, asked of main rather than passed as an
+ * argument: command lines are readable by every other process of this user.
+ */
+function localToken() {
+  try {
+    const token = ipcRenderer.sendSync(LOCAL_TOKEN_CHANNEL);
+    return isLocalToken(token) ? token : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
  * Deliberately minimal.
  *
  * The renderer already reaches the backend over HTTP and WebSocket on
@@ -49,6 +63,7 @@ contextBridge.exposeInMainWorld('alphaDesktop', {
   platform: process.platform,
   apiBase: runtimeArgument('--alpha-api-base='),
   wsUrl: runtimeArgument('--alpha-ws-url='),
+  localToken: localToken(),
   appearanceThemeId: initialAppearanceThemeId(),
   setAppearanceTheme: id => ipcRenderer.invoke(SET_THEME_CHANNEL, id),
   onAppearanceThemeChanged: listener => {

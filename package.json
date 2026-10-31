@@ -8,6 +8,7 @@
   "private": true,
   "scripts": {
     "test:appearance": "node --test tests/appearance.test.cjs tests/appearance-bridge.test.cjs tests/appearance-main.test.cjs tests/appearance-prepare.test.cjs",
+    "test:local-access": "node --test tests/local-access.test.cjs",
     "prepare:build": "node scripts/prepare.mjs",
     "start": "npm run prepare:build && electron .",
     "dist": "npm run prepare:build && electron-builder --win",
@@ -51,6 +52,7 @@
       "preload.js",
       "desktop-address.cjs",
       "appearance.cjs",
+      "local-access.cjs",
       "local-preview-view.cjs",
       "assets/**/*",
       "build/**/*",
