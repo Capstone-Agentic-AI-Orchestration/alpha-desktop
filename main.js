@@ -5,6 +5,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const http = require('node:http');
 const crypto = require('node:crypto');
+const { pathToFileURL } = require('node:url');
 
 /**
  * Guard against ELECTRON_RUN_AS_NODE.
@@ -129,6 +130,7 @@ function recordGpuLaunch() {
 
 const { HOST, PORT: BUILD_PORT } = require('./desktop-address.cjs');
 const { createAppearance, SET_THEME_CHANNEL, BOOTSTRAP_THEME_CHANNEL } = require('./appearance.cjs');
+const { LOCAL_TOKEN_CHANNEL, createLocalToken, isTrustedRendererSender } = require('./local-access.cjs');
 
 let mainWindow = null;
 let appearance;
@@ -259,6 +261,21 @@ async function startBackend() {
   process.env.CORS_ORIGIN = 'file://';
 
   /**
+   * This launch's secret for the local engine.
+   *
+   * Loopback keeps other machines out, not other things on this one: a web
+   * page can send requests to 127.0.0.1, and one rebound to it can read the
+   * answers. The engine now refuses API calls and stream connections without
+   * this token, and only this app's window is given it (see preload.js).
+   *
+   * Handed over as a global, never as an environment variable: the engine
+   * runs in this process, and everything it spawns -- agents, verification,
+   * MCP servers -- would inherit an environment variable, and with it the
+   * whole API.
+   */
+  globalThis.__alphaLocalToken = LOCAL_TOKEN;
+
+  /**
    * Encryption for the remembered GitHub accounts, handed to the daemon.
    *
    * The daemon keeps one token per remembered account so switching between
@@ -290,6 +307,8 @@ async function startBackend() {
 }
 
 const INSTANCE = crypto.randomUUID();
+const LOCAL_TOKEN = createLocalToken();
+const RENDERER_URL = pathToFileURL(path.join(__dirname, 'build', 'renderer', 'index.html')).href;
 
 /**
  * Resolve once *this app's* daemon answers, so the window never loads against
@@ -426,14 +445,34 @@ function githubToken() {
 let updater = null;
 
 /**
- * Put the current GitHub token in the environment for electron-updater, and say
- * whether there was one. Shared by the scheduled checks and the manual one, so
- * a sign-in that happened since launch counts for both.
+ * Where releases are read from. Must match package.json build.publish, which
+ * also writes app-update.yml (tests/local-access.test.cjs checks they agree).
  */
-function applyGitHubToken() {
+const RELEASE_FEED = Object.freeze({
+  provider: 'github',
+  owner: 'Capstone-Agentic-AI-Orchestration',
+  repo: 'alpha-desktop',
+  private: true,
+  releaseType: 'release'
+});
+
+/**
+ * Point electron-updater at the private releases with the current GitHub token,
+ * and say whether there was one. Shared by the scheduled checks and the manual
+ * one, so a sign-in that happened since launch counts for both.
+ *
+ * The token goes to the updater directly. It used to be written to
+ * process.env.GH_TOKEN, which the engine in this same process then passed to
+ * every child it spawned: a project's npm install during verification could
+ * read the person's GitHub token from its environment. setFeedURL replaces only
+ * the release source; the cache folder and publisher still come from
+ * app-update.yml.
+ */
+function applyGitHubToken(autoUpdater) {
   const token = githubToken();
-  if (token) process.env.GH_TOKEN = token;
-  return Boolean(token);
+  if (!token) return false;
+  autoUpdater.setFeedURL({ ...RELEASE_FEED, token });
+  return true;
 }
 
 function startUpdateChecks(window) {
@@ -474,7 +513,7 @@ function startUpdateChecks(window) {
    * immediately, rather than at the next restart.
    */
   const check = () => {
-    if (!applyGitHubToken()) {
+    if (!applyGitHubToken(autoUpdater)) {
       log.info('Update check skipped: not signed in to GitHub yet.');
       return;
     }
@@ -555,6 +594,22 @@ function startUpdateChecks(window) {
  * 2.0.1 shipped and would have stayed wrong forever.
  */
 ipcMain.handle('alpha:app-version', () => app.getVersion());
+/**
+ * The engine's launch token, for this app's own window and nothing else.
+ *
+ * Synchronous so preload has it before any page script runs. Always answered,
+ * so a refused sender is not left blocked; a frame that is not the packaged
+ * renderer in the main window -- a preview, a navigated page -- gets null.
+ */
+ipcMain.on(LOCAL_TOKEN_CHANNEL, event => {
+  let token = null;
+  try {
+    if (isTrustedRendererSender(event, mainWindow, RENDERER_URL)) token = LOCAL_TOKEN;
+  } catch {
+    // Destroyed or navigating contents get nothing.
+  }
+  event.returnValue = token;
+});
 ipcMain.on(BOOTSTRAP_THEME_CHANNEL, event => {
   // Always answer synchronous IPC, including rejection, to avoid blocking the
   // preload. Only a trusted Alpha main frame receives the cached ID.
@@ -596,7 +651,7 @@ ipcMain.handle('alpha:check-for-updates', async () => {
   }
   // Releases are in a private repository: without a sign-in there is nothing to
   // read them with, and saying so beats reporting "up to date".
-  if (!applyGitHubToken()) {
+  if (!applyGitHubToken(updater)) {
     return { status: 'unsupported', reason: 'Sign in to GitHub in Connected Accounts, so Alpha can read its own releases.' };
   }
   try {
