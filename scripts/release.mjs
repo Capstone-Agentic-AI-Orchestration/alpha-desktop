@@ -92,11 +92,10 @@ const repo = (() => {
 })();
 
 /**
- * Releases must originate from a pushed release branch. electron-builder's
- * GitHub publisher creates a missing release tag without a target commit;
- * GitHub then defaults that tag to the repository's default branch. We create
- * and push the version tag from this branch after the package checks pass, so
- * a live-test release can never silently tag main.
+ * Manual releases originate from a pushed release branch. The dedicated
+ * Desktop Release workflow may also publish a pushed main commit. In either
+ * case, create and push the version tag from the checked commit before
+ * electron-builder uploads assets, so the tag always identifies what shipped.
  */
 const git = (args) => execFileSync('git', args, { cwd: desktop, windowsHide: true }).toString().trim();
 const branch = git(['branch', '--show-current']);
@@ -143,8 +142,15 @@ const defaultBranch = (() => {
   try { return git(['symbolic-ref', '--quiet', '--short', 'refs/remotes/origin/HEAD']).replace(/^origin\//, ''); }
   catch { return ''; }
 })();
-if (!branch || ['main', 'master', defaultBranch].filter(Boolean).includes(branch) || !branch.startsWith('release/')) {
-  die(`Run desktop releases from a dedicated release/... branch; the current branch is "${branch || '(detached HEAD)'}".`);
+const automatedMainPush = process.env.GITHUB_ACTIONS === 'true'
+  && process.env.GITHUB_WORKFLOW === 'Desktop Release'
+  && process.env.GITHUB_EVENT_NAME === 'push'
+  && process.env.GITHUB_REF === 'refs/heads/main';
+const releaseBranch = Boolean(branch)
+  && branch.startsWith('release/')
+  && !['main', 'master', defaultBranch].filter(Boolean).includes(branch);
+if (!automatedMainPush && !releaseBranch) {
+  die(`Run desktop releases from a dedicated release/... branch or the main push workflow; the current branch is "${branch || '(detached HEAD)'}".`);
 }
 if (git(['status', '--porcelain'])) {
   die('Commit and push the release branch before packaging. The release tool will not publish uncommitted source changes.');

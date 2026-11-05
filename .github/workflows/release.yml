@@ -1,0 +1,124 @@
+name: Desktop Release
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+concurrency:
+  group: desktop-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: windows-latest
+    env:
+      # These values are embedded in the installer and must be public app config.
+      ALPHA_ORG: ${{ vars.ALPHA_ORG }}
+      ALPHA_CLOUD_API: ${{ vars.ALPHA_CLOUD_API }}
+      SUPABASE_URL: ${{ vars.SUPABASE_URL }}
+      SUPABASE_ANON_KEY: ${{ vars.SUPABASE_ANON_KEY }}
+      ALPHAORCH_WORKFLOW_REPO: ${{ vars.ALPHAORCH_WORKFLOW_REPO }}
+      ALPHAORCH_WORKFLOW_REF: ${{ vars.ALPHAORCH_WORKFLOW_REF }}
+
+    steps:
+      - name: Check out desktop
+        uses: actions/checkout@v7
+        with:
+          ref: main
+          path: alpha-desktop
+          fetch-depth: 0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+
+      - name: Check whether this version is already published
+        id: release-check
+        shell: pwsh
+        working-directory: alpha-desktop
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $version = (node -p "require('./package.json').version").Trim()
+          $tag = "v$version"
+          $isDraft = gh release view $tag --repo $env:GITHUB_REPOSITORY --json isDraft --jq .isDraft 2>$null
+          $lookupExitCode = $LASTEXITCODE
+
+          if ($lookupExitCode -eq 0 -and $isDraft -eq 'false') {
+            Add-Content -Path $env:GITHUB_OUTPUT -Value 'should_release=false'
+            Write-Host "$tag is already published; skipping this push."
+          } else {
+            Add-Content -Path $env:GITHUB_OUTPUT -Value 'should_release=true'
+            Write-Host "$tag is not published yet; continuing with the release."
+          }
+
+      - name: Validate release configuration
+        if: steps.release-check.outputs.should_release == 'true'
+        shell: pwsh
+        run: |
+          $required = @(
+            'ALPHA_ORG',
+            'ALPHA_CLOUD_API',
+            'SUPABASE_URL',
+            'SUPABASE_ANON_KEY',
+            'ALPHAORCH_WORKFLOW_REPO',
+            'ALPHAORCH_WORKFLOW_REF'
+          )
+          $missing = $required | Where-Object {
+            [string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($_))
+          }
+          if ($missing) {
+            throw "Set these Actions repository variables before releasing: $($missing -join ', ')"
+          }
+
+      # If either source repo is private, set ALPHA_SOURCE_REPOS_TOKEN to a
+      # token with read access to both repositories.
+      - name: Check out frontend
+        if: steps.release-check.outputs.should_release == 'true'
+        uses: actions/checkout@v7
+        with:
+          repository: Capstone-Agentic-AI-Orchestration/alpha-fe-main
+          ref: main
+          path: alpha-fe-main
+          token: ${{ secrets.ALPHA_SOURCE_REPOS_TOKEN || github.token }}
+          fetch-depth: 0
+
+      - name: Check out backend
+        if: steps.release-check.outputs.should_release == 'true'
+        uses: actions/checkout@v7
+        with:
+          repository: Capstone-Agentic-AI-Orchestration/alpha-be-main
+          ref: main
+          path: alpha-be-main
+          token: ${{ secrets.ALPHA_SOURCE_REPOS_TOKEN || github.token }}
+          fetch-depth: 0
+
+      - name: Install desktop dependencies
+        if: steps.release-check.outputs.should_release == 'true'
+        working-directory: alpha-desktop
+        run: npm ci
+
+      - name: Install frontend dependencies
+        if: steps.release-check.outputs.should_release == 'true'
+        working-directory: alpha-fe-main
+        run: npm ci
+
+      - name: Install backend dependencies
+        if: steps.release-check.outputs.should_release == 'true'
+        working-directory: alpha-be-main
+        run: npm ci
+
+      - name: Build and publish release
+        if: steps.release-check.outputs.should_release == 'true'
+        working-directory: alpha-desktop
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ALPHA_RELEASE_SOURCE_BRANCH: main
+          ALPHA_FE_DIR: ${{ github.workspace }}/alpha-fe-main
+          ALPHA_BE_DIR: ${{ github.workspace }}/alpha-be-main
+        run: npm run release
