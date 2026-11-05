@@ -268,5 +268,5 @@ execFileSync(gh, ['release', 'edit', tag, '--repo', repo, '--draft=false'], {
   cwd: desktop, stdio: 'inherit', windowsHide: true, env: { ...process.env, GH_TOKEN: token }
 });
 say(`\nPublished ${tag} after verifying all update assets.`);
-say('Installed copies will offer it on their next check (on launch, and every six hours).');
+say('Installed copies require this update before opening the workspace.');
 say(`Release page: https://github.com/${repo}/releases/tag/${tag}`);

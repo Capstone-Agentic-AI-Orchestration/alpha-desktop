@@ -443,6 +443,7 @@ function githubToken() {
  * appearing to work.
  */
 let updater = null;
+let startupUpdateCheckAttempted = false;
 
 /**
  * Where releases are read from. Must match package.json build.publish, which
@@ -475,17 +476,208 @@ function applyGitHubToken(autoUpdater) {
   return true;
 }
 
+/**
+ * Show progress without creating the workspace window. Every installed
+ * release from 2.0.84 onward checks for a newer installer before opening the
+ * workspace. If one exists, Alpha stays on this small updater window until it
+ * has installed and restarted.
+ */
+function createRequiredUpdateWindow(version) {
+  const win = new BrowserWindow({
+    width: 460,
+    height: 250,
+    minWidth: 460,
+    maxWidth: 460,
+    minHeight: 250,
+    maxHeight: 250,
+    resizable: false,
+    minimizable: false,
+    maximizable: false,
+    show: false,
+    title: 'Alpha update required',
+    autoHideMenuBar: true,
+    webPreferences: {
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true
+    }
+  });
+  const page = `<!doctype html>
+    <html><head><meta charset="utf-8"><title>Alpha update required</title>
+      <style>
+        * { box-sizing: border-box; }
+        body { margin: 0; padding: 30px; color: #202938; background: #fff;
+          font: 14px "Segoe UI", sans-serif; }
+        h1 { margin: 0 0 10px; font-size: 20px; font-weight: 600; }
+        p { margin: 0; color: #596579; line-height: 1.5; }
+        .version { color: #1769e0; font-weight: 600; }
+        .track { height: 8px; margin: 24px 0 10px; overflow: hidden;
+          border-radius: 99px; background: #e9eef5; }
+        .bar { width: 0; height: 100%; background: #1769e0; transition: width .2s; }
+        #status { font-size: 12px; color: #596579; }
+      </style>
+    </head><body>
+      <h1>Installing a required update</h1>
+      <p>Alpha <span class="version">${version}</span> must be installed before the workspace can open.</p>
+      <div class="track"><div class="bar" id="progress"></div></div>
+      <p id="status">Downloading update…</p>
+    </body></html>`;
+  win.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(page)}`);
+  win.once('ready-to-show', () => win.show());
+  win.setProgressBar(0);
+
+  let canClose = false;
+  win.on('close', event => {
+    if (canClose) return;
+    event.preventDefault();
+    // Closing the required-update screen means quitting. It never opens the
+    // workspace while an update is waiting to be installed.
+    app.quit();
+  });
+
+  return {
+    update(progress) {
+      const percent = Math.max(0, Math.min(100, Number(progress?.percent) || 0));
+      const status = percent >= 100
+        ? 'Download complete. Restarting to install…'
+        : `Downloading update… ${Math.round(percent)}%`;
+      if (win.isDestroyed()) return;
+      win.setProgressBar(percent / 100);
+      win.webContents.executeJavaScript(
+        `document.getElementById('progress').style.width = ${JSON.stringify(`${percent}%`)};` +
+        `document.getElementById('status').textContent = ${JSON.stringify(status)};`
+      ).catch(() => {});
+    },
+    close() {
+      canClose = true;
+      win.setProgressBar(-1);
+      if (!win.isDestroyed()) win.close();
+    }
+  };
+}
+
+/**
+ * Check before createWindow. A positively identified newer installer is
+ * mandatory: the person may download it or quit, but the workspace stays
+ * closed until that installer restarts Alpha. If the private release feed
+ * cannot be checked, keep Alpha usable and log why.
+ */
+async function checkForStartupUpdate() {
+  startupUpdateCheckAttempted = true;
+  if (!app.isPackaged) return false;
+
+  let autoUpdater;
+  try {
+    ({ autoUpdater } = require('electron-updater'));
+  } catch (err) {
+    console.error('Required update check is unavailable:', err?.message || err);
+    return false;
+  }
+  updater = autoUpdater;
+
+  const log = require('electron-log');
+  log.transports.file.level = 'info';
+  autoUpdater.logger = log;
+  autoUpdater.autoDownload = false;
+  autoUpdater.autoInstallOnAppQuit = true;
+
+  if (!applyGitHubToken(autoUpdater)) {
+    log.info('Startup update check skipped: not signed in to GitHub yet.');
+    return false;
+  }
+
+  const onError = err => log.error('Startup update failed:', err?.message || err);
+  autoUpdater.on('error', onError);
+  let requiredVersion = null;
+  try {
+    const result = await autoUpdater.checkForUpdates();
+    if (!result?.isUpdateAvailable) return false;
+
+    const version = result.updateInfo.version;
+    requiredVersion = version;
+    log.info(`Required startup update found: ${version}`);
+    const { response } = await dialog.showMessageBox({
+      type: 'warning',
+      buttons: ['Download and install', 'Quit Alpha'],
+      defaultId: 0,
+      cancelId: 1,
+      title: 'Alpha update required',
+      message: `Alpha ${version} is required before you can continue.`,
+      detail: `Your installed version is ${app.getVersion()}. Download the required update and Alpha will restart to install it.`
+    });
+    if (response !== 0) {
+      app.quit();
+      return true;
+    }
+
+    let progressWindow = createRequiredUpdateWindow(version);
+    const onProgress = progress => progressWindow?.update(progress);
+    autoUpdater.on('download-progress', onProgress);
+    try {
+      for (;;) {
+        try {
+          await autoUpdater.downloadUpdate();
+          progressWindow?.update({ percent: 100 });
+          // Let the completion status render before the installer closes Alpha.
+          await new Promise(resolve => setTimeout(resolve, 350));
+          autoUpdater.quitAndInstall();
+          return true;
+        } catch (err) {
+          progressWindow?.close();
+          progressWindow = null;
+          log.error('Required update download failed:', err?.message || err);
+          const retry = await dialog.showMessageBox({
+            type: 'error',
+            buttons: ['Retry download', 'Quit Alpha'],
+            defaultId: 0,
+            cancelId: 1,
+            title: 'Required update could not download',
+            message: `Alpha ${version} must be installed before the workspace can open.`,
+            detail: err?.message ? String(err.message) : String(err)
+          });
+          if (retry.response !== 0) {
+            app.quit();
+            return true;
+          }
+          progressWindow = createRequiredUpdateWindow(version);
+        }
+      }
+    } finally {
+      autoUpdater.removeListener('download-progress', onProgress);
+      progressWindow?.close();
+    }
+  } catch (err) {
+    if (requiredVersion) {
+      log.error(`Required update ${requiredVersion} could not be prepared:`, err?.message || err);
+      dialog.showErrorBox(
+        'Alpha update required',
+        `Alpha ${requiredVersion} must be installed before the workspace can open. Quit Alpha and try again when the update service is available.`
+      );
+      app.quit();
+      return true;
+    }
+    // An unavailable network or private-release check must not strand someone
+    // who is already using Alpha; only a confirmed newer release is blocking.
+    log.error('Startup update check failed; opening the current version:', err?.message || err);
+    return false;
+  } finally {
+    autoUpdater.removeListener('error', onError);
+  }
+}
+
 function startUpdateChecks(window) {
   // Never in development: electron-updater has no packaged app to compare
   // against and logs a confusing error every few hours.
   if (!app.isPackaged) return;
 
-  let autoUpdater;
-  try {
-    ({ autoUpdater } = require('electron-updater'));
-  } catch {
-    return;
+  if (!updater) {
+    try {
+      ({ autoUpdater: updater } = require('electron-updater'));
+    } catch {
+      return;
+    }
   }
+  const autoUpdater = updater;
 
   /**
    * Every check, download and failure, on disk.
@@ -557,7 +749,7 @@ function startUpdateChecks(window) {
   });
 
   updater = autoUpdater;
-  check();
+  if (!startupUpdateCheckAttempted) check();
 
   /**
    * Once more shortly after launch, then every six hours.
@@ -789,6 +981,9 @@ if (gotSingleInstanceLock) {
       app.quit();
       return;
     }
+
+    const updateIsRestartingOrAppIsQuitting = await checkForStartupUpdate();
+    if (updateIsRestartingOrAppIsQuitting) return;
 
     createWindow();
 
