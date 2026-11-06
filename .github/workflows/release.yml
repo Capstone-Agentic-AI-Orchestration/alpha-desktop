@@ -48,6 +48,8 @@ jobs:
           $tag = "v$version"
           $isDraft = gh release view $tag --repo $env:GITHUB_REPOSITORY --json isDraft --jq .isDraft 2>$null
           $lookupExitCode = $LASTEXITCODE
+          # A missing release is expected for a new version; don't let gh's exit code fail this step.
+          $LASTEXITCODE = 0
 
           if ($lookupExitCode -eq 0 -and $isDraft -eq 'false') {
             Add-Content -Path $env:GITHUB_OUTPUT -Value 'should_release=false'
