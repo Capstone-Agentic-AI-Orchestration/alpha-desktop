@@ -123,4 +123,7 @@ jobs:
           ALPHA_RELEASE_SOURCE_BRANCH: main
           ALPHA_FE_DIR: ${{ github.workspace }}/alpha-fe-main
           ALPHA_BE_DIR: ${{ github.workspace }}/alpha-be-main
-        run: npm run release
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          npm run release
