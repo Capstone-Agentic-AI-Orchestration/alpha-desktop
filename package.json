@@ -50,6 +50,8 @@
     "files": [
       "main.js",
       "preload.js",
+      "startup-update.html",
+      "startup-update-preload.js",
       "desktop-address.cjs",
       "appearance.cjs",
       "local-access.cjs",
@@ -70,7 +72,7 @@
     ],
     "win": {
       "signAndEditExecutable": true,
-      "icon": "assets/icon.ico",
+      "icon": "assets/alpha-mark.png",
       "target": [
         {
           "target": "nsis",

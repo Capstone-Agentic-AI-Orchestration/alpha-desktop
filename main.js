@@ -133,11 +133,23 @@ const { createAppearance, SET_THEME_CHANNEL, BOOTSTRAP_THEME_CHANNEL } = require
 const { LOCAL_TOKEN_CHANNEL, createLocalToken, isTrustedRendererSender } = require('./local-access.cjs');
 
 let mainWindow = null;
+let startupUpdateWindow = null;
+let startupUpdateState = null;
+let startupUpdateDecision = null;
+let startupUpdateGateActive = false;
 let appearance;
 let previewSurface;
 let previewService;
 let focusWhenReady = false;
 let PORT = BUILD_PORT;
+const STARTUP_SESSION_TIMEOUT_MS = 15_000;
+const STARTUP_UPDATE_CHECK_TIMEOUT_MS = 20_000;
+const STARTUP_TIMEOUT_CODE = 'ALPHA_STARTUP_TIMEOUT';
+const MAIN_WINDOW_HANDOFF_TIMEOUT_MS = 5_000;
+
+function isPortableBuild() {
+  return process.platform === 'win32' && Boolean(process.env.PORTABLE_EXECUTABLE_FILE);
+}
 
 /**
  * Keep one process per Electron user profile; a duplicate launch simply brings
@@ -148,13 +160,14 @@ let PORT = BUILD_PORT;
 const gotSingleInstanceLock = app.requestSingleInstanceLock();
 
 const focusMainWindow = () => {
-  if (!mainWindow) {
+  const target = mainWindow || startupUpdateWindow;
+  if (!target) {
     focusWhenReady = true;
     return;
   }
-  if (mainWindow.isMinimized()) mainWindow.restore();
-  if (!mainWindow.isVisible()) mainWindow.show();
-  mainWindow.focus();
+  if (target.isMinimized()) target.restore();
+  if (!target.isVisible()) target.show();
+  target.focus();
 };
 
 if (!gotSingleInstanceLock) {
@@ -309,6 +322,8 @@ async function startBackend() {
 const INSTANCE = crypto.randomUUID();
 const LOCAL_TOKEN = createLocalToken();
 const RENDERER_URL = pathToFileURL(path.join(__dirname, 'build', 'renderer', 'index.html')).href;
+const STARTUP_UPDATE_FILE = path.join(__dirname, 'startup-update.html');
+const STARTUP_UPDATE_URL = pathToFileURL(STARTUP_UPDATE_FILE).href;
 
 /**
  * Resolve once *this app's* daemon answers, so the window never loads against
@@ -362,6 +377,111 @@ function waitForBackend(timeoutMs = 20000) {
     attempt();
   });
 }
+
+function setStartupUpdateState(state) {
+  startupUpdateState = { ...state, version: app.getVersion() };
+  if (!startupUpdateWindow || startupUpdateWindow.isDestroyed()) return;
+  startupUpdateWindow.webContents.send('alpha:startup-update:state', startupUpdateState);
+}
+
+function destroyStartupUpdateWindow() {
+  const window = startupUpdateWindow;
+  startupUpdateWindow = null;
+  if (window && !window.isDestroyed()) window.destroy();
+}
+
+function isTrustedStartupUpdateSender(event) {
+  const window = startupUpdateWindow;
+  if (!window || window.isDestroyed() || window.webContents.isDestroyed()) return false;
+  // Only this window's top-level renderer may invoke startup actions. The
+  // window itself also blocks navigation, so comparing serialized file URLs
+  // here only risks rejecting a legitimate click due to Windows URL casing.
+  return event.sender === window.webContents && event.senderFrame === window.webContents.mainFrame;
+}
+
+function createStartupUpdateWindow() {
+  startupUpdateWindow = new BrowserWindow({
+    width: 460,
+    height: 390,
+    minWidth: 460,
+    minHeight: 390,
+    maxWidth: 460,
+    maxHeight: 390,
+    center: true,
+    show: false,
+    frame: false,
+    transparent: true,
+    hasShadow: true,
+    resizable: false,
+    minimizable: false,
+    maximizable: false,
+    closable: false,
+    title: 'Alpha',
+    icon: path.join(__dirname, 'assets', 'alpha-mark.png'),
+    backgroundColor: '#10131a',
+    webPreferences: {
+      preload: path.join(__dirname, 'startup-update-preload.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true
+    }
+  });
+
+  startupUpdateWindow.webContents.on('did-finish-load', () => {
+    if (startupUpdateState && !startupUpdateWindow.isDestroyed()) {
+      startupUpdateWindow.webContents.send('alpha:startup-update:state', startupUpdateState);
+    }
+  });
+  startupUpdateWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+  startupUpdateWindow.webContents.on('will-navigate', (event, url) => {
+    if (url !== STARTUP_UPDATE_URL) event.preventDefault();
+  });
+  startupUpdateWindow.once('ready-to-show', () => {
+    if (!startupUpdateWindow || startupUpdateWindow.isDestroyed()) return;
+    startupUpdateWindow.show();
+    if (focusWhenReady) {
+      focusWhenReady = false;
+      startupUpdateWindow.focus();
+    }
+  });
+  startupUpdateWindow.on('closed', () => { startupUpdateWindow = null; });
+  startupUpdateWindow.loadFile(STARTUP_UPDATE_FILE);
+  return startupUpdateWindow;
+}
+
+function waitForStartupUpdateDecision(message, title = 'Couldn’t check for updates') {
+  return new Promise(resolve => {
+    startupUpdateDecision = resolve;
+    setStartupUpdateState({
+      phase: 'error',
+      title,
+      message,
+      canRetry: true,
+      canContinue: true
+    });
+  });
+}
+
+ipcMain.handle('alpha:startup-update:action', (event, action) => {
+  if (!isTrustedStartupUpdateSender(event)) return false;
+  if (action === 'quit') {
+    startupUpdateDecision = null;
+    updaterLog?.info('Quit requested from the startup updater.');
+    // Remove the splash immediately; app.quit() may wait for the local preview
+    // service to shut down before Electron exits.
+    destroyStartupUpdateWindow();
+    app.quit();
+    return true;
+  }
+  if (!['retry', 'continue'].includes(action) || !startupUpdateDecision || startupUpdateState?.phase !== 'error') {
+    return false;
+  }
+
+  const resolve = startupUpdateDecision;
+  startupUpdateDecision = null;
+  resolve(action);
+  return true;
+});
 
 /**
  * Keeping everyone on the same build.
@@ -436,13 +556,11 @@ function githubToken() {
 }
 
 /**
- * The updater once it is set up, so a manual check can reach it.
- *
- * Null in development and when `gh` has no token. Both mean there is nothing
- * to check with, and the answer to a manual check should say which rather than
- * appearing to work.
+ * The updater once initialized, so the startup gate and manual check can share
+ * the same instance. It remains null in development builds.
  */
 let updater = null;
+let updaterLog = null;
 
 /**
  * Where releases are read from. Must match package.json build.publish, which
@@ -475,116 +593,207 @@ function applyGitHubToken(autoUpdater) {
   return true;
 }
 
-function startUpdateChecks(window) {
-  // Never in development: electron-updater has no packaged app to compare
-  // against and logs a confusing error every few hours.
-  if (!app.isPackaged) return;
+function withStartupTimeout(promise, timeoutMs, message) {
+  let timer;
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => {
+      const error = new Error(message);
+      error.code = STARTUP_TIMEOUT_CODE;
+      reject(error);
+    }, timeoutMs);
+  });
+
+  return Promise.race([Promise.resolve(promise), timeout]).finally(() => clearTimeout(timer));
+}
+
+async function waitForRememberedGitHubSession() {
+  try {
+    const auth = require(path.join(__dirname, 'build', 'server', 'services', 'alphaGitHubToken.js'));
+    await withStartupTimeout(
+      auth.sessionReady?.(),
+      STARTUP_SESSION_TIMEOUT_MS,
+      'Restoring the remembered GitHub sign-in took too long.'
+    );
+    return true;
+  } catch (err) {
+    if (err?.code === STARTUP_TIMEOUT_CODE) return false;
+    // The update flow below will show a retry/continue choice if no token is available.
+    return true;
+  }
+}
+
+function initializeUpdater() {
+  // Never in development: electron-updater has no packaged app to compare.
+  // Portable executables cannot be replaced by electron-updater's NSIS installer.
+  if (!app.isPackaged || isPortableBuild()) return null;
+  if (updater) return updater;
 
   let autoUpdater;
   try {
     ({ autoUpdater } = require('electron-updater'));
-  } catch {
-    return;
+  } catch (err) {
+    console.error('Could not load the update service:', err?.message || err);
+    return null;
   }
 
-  /**
-   * Every check, download and failure, on disk.
-   *
-   * A packaged Windows app has no console, so the handlers below logged into
-   * nothing: an update that never arrived looked exactly like one that failed,
-   * with no record either way. electron-log writes to the user's log directory,
-   * which is then the first place to look when someone says they did not get a
-   * release.
-   */
-  const log = require('electron-log');
-  log.transports.file.level = 'info';
-  autoUpdater.logger = log;
+  updaterLog = require('electron-log');
+  updaterLog.transports.file.level = 'info';
+  autoUpdater.logger = updaterLog;
+  // Checks made while Alpha is open report availability without downloading or
+  // restarting. The startup gate owns the blocking download/install flow.
+  autoUpdater.autoDownload = false;
+  autoUpdater.autoInstallOnAppQuit = false;
 
-  /**
-   * The token is resolved per check, not once at startup.
-   *
-   * It used to be read here and the whole function abandoned if it was missing
-   * -- which meant no updater, and no interval either, so updates were off for
-   * the rest of the session with nothing said. That is precisely the state a
-   * first launch is in: the app starts, nobody is signed in yet, and by the
-   * time they are, the only code that could have noticed has already returned.
-   *
-   * Reading it per check also means signing in to Alpha enables updates
-   * immediately, rather than at the next restart.
-   */
-  const check = () => {
-    if (!applyGitHubToken(autoUpdater)) {
-      log.info('Update check skipped: not signed in to GitHub yet.');
-      return;
-    }
-    autoUpdater.checkForUpdates().catch(err => {
-      // checkForUpdates rejects as well as emitting 'error'; swallowing it
-      // silently here is what made a failed check indistinguishable from a
-      // successful one that found nothing.
-      log.error('Update check failed:', err && err.message ? err.message : err);
+  autoUpdater.on('download-progress', progress => {
+    if (!startupUpdateGateActive) return;
+    setStartupUpdateState({
+      phase: 'downloading',
+      title: `Updating Alpha to ${startupUpdateState?.targetVersion || 'the latest version'}`,
+      message: 'Downloading and verifying the update before opening your workspace.',
+      progress: Number.isFinite(progress.percent) ? progress.percent : 0,
+      canRetry: false,
+      canContinue: false
     });
-  };
-
-  /**
-   * Download automatically, install when the user is ready.
-   *
-   * Alpha spawns agent CLIs that write to a git checkout — restarting under one
-   * would leave a half-finished run and a branch nobody expected. So the
-   * download is silent and the restart is always the person's choice.
-   */
-  autoUpdater.autoDownload = true;
-  autoUpdater.autoInstallOnAppQuit = true;
-
-  autoUpdater.on('update-downloaded', async (info) => {
-    const { response } = await dialog.showMessageBox(window, {
-      type: 'info',
-      buttons: ['Restart now', 'Later'],
-      defaultId: 0,
-      cancelId: 1,
-      title: 'Alpha update ready',
-      message: `Alpha ${info.version} is ready to install.`,
-      detail:
-        'It will install when you next quit, or you can restart now. ' +
-        'Your board, agents and history are unaffected — the database is migrated in place.'
-    });
-    if (response === 0) autoUpdater.quitAndInstall();
   });
 
-  autoUpdater.on('error', (err) => {
-    // A failed check is not worth a dialog: the app works, it is just not the
-    // newest. Logged so it is diagnosable, silent so it is not annoying.
-    log.error('Update check failed:', err?.message || err);
+  autoUpdater.on('update-downloaded', info => {
+    updaterLog.info(
+      startupUpdateGateActive
+        ? `Alpha ${info.version} startup update is ready to install.`
+        : `Alpha ${info.version} update is staged for the next launch.`
+    );
+  });
+
+  autoUpdater.on('error', err => {
+    updaterLog.error('Update check failed:', err?.message || err);
   });
 
   updater = autoUpdater;
-  check();
-
-  /**
-   * Once more shortly after launch, then every six hours.
-   *
-   * A single check at startup is one network request to lose: a laptop opened
-   * before its wifi associates, a release published a minute after the app
-   * happened to start, or any transient failure, and the next attempt was six
-   * hours away with nothing to show for it. The early retry costs one request
-   * and closes the common cases.
-   */
-  setTimeout(check, 5 * 60 * 1000);
-  // Every six hours, for the machine that stays open all week.
-  setInterval(check, 6 * 60 * 60 * 1000);
+  return updater;
 }
 
-/**
- * A check the person can ask for, rather than one they wait for.
- *
- * The automatic check runs on launch and then every six hours, so someone who
- * knows a release exists -- because they just published it, or a teammate told
- * them -- had no way to say "get it now" short of restarting the app. Six hours
- * is a long time to stare at a version number.
- *
- * Answers what happened rather than starting a download and going quiet: the
- * dialog that offers the restart still comes from `update-downloaded`, since a
- * download begun here finishes the same way as one begun on the schedule.
- */
+async function runStartupUpdateGate() {
+  if (!app.isPackaged || isPortableBuild()) return { continueToApp: true, checked: false };
+  startupUpdateGateActive = true;
+  while (true) {
+    setStartupUpdateState({
+      phase: 'starting',
+      title: 'Checking for updates',
+      message: 'Restoring your GitHub sign-in so Alpha can read its private releases.',
+      progress: 0,
+      canRetry: false,
+      canContinue: false
+    });
+
+    const sessionReady = await waitForRememberedGitHubSession();
+    if (!sessionReady) {
+      const action = await waitForStartupUpdateDecision(
+        'Restoring your GitHub sign-in is taking longer than expected. Retry the check or open Alpha without checking.',
+        'GitHub sign-in timed out'
+      );
+      if (action === 'retry') continue;
+      startupUpdateGateActive = false;
+      return { continueToApp: true, checked: false };
+    }
+
+    const autoUpdater = initializeUpdater();
+    if (!autoUpdater) {
+      const action = await waitForStartupUpdateDecision(
+        'Alpha’s update service could not start. You can retry or open Alpha without checking.'
+      );
+      if (action === 'retry') continue;
+      startupUpdateGateActive = false;
+      return { continueToApp: true, checked: false };
+    }
+
+    if (!applyGitHubToken(autoUpdater)) {
+      const action = await waitForStartupUpdateDecision(
+        'Connect to GitHub in Alpha to check its private release feed. You can also open Alpha now.',
+        'GitHub sign-in needed'
+      );
+      if (action === 'retry') continue;
+      startupUpdateGateActive = false;
+      return { continueToApp: true, checked: false };
+    }
+
+    setStartupUpdateState({
+      phase: 'checking',
+      title: 'Checking for updates',
+      message: 'Looking for the latest Alpha release before opening your workspace.',
+      progress: 0,
+      canRetry: false,
+      canContinue: false
+    });
+
+    // Keep auto-download disabled while checking; the launch gate explicitly
+    // starts the download so its progress remains visible before the workspace.
+    autoUpdater.autoDownload = false;
+
+    try {
+      const result = await withStartupTimeout(
+        autoUpdater.checkForUpdates(),
+        STARTUP_UPDATE_CHECK_TIMEOUT_MS,
+        'The Alpha release service did not respond in time.'
+      );
+      if (!result) throw new Error('The update service did not return a release status.');
+
+      if (!result.isUpdateAvailable) {
+        setStartupUpdateState({
+          phase: 'current',
+          title: 'You’re up to date',
+          message: 'Opening Alpha…',
+          progress: 100,
+          canRetry: false,
+          canContinue: false
+        });
+        await new Promise(resolve => setTimeout(resolve, 500));
+        startupUpdateGateActive = false;
+        return { continueToApp: true, checked: true };
+      }
+
+      const targetVersion = result.updateInfo?.version || result.versionInfo?.version || 'the latest version';
+      startupUpdateState = { ...(startupUpdateState || {}), targetVersion };
+      setStartupUpdateState({
+        phase: 'downloading',
+        title: `Updating Alpha to ${targetVersion}`,
+        message: 'Downloading and verifying the update before opening your workspace.',
+        progress: 0,
+        canRetry: false,
+        canContinue: false,
+        targetVersion
+      });
+      const download = result.downloadPromise || autoUpdater.downloadUpdate();
+      await download;
+
+      setStartupUpdateState({
+        phase: 'installing',
+        title: 'Finishing the update',
+        message: 'Alpha will restart automatically when the update is ready.',
+        progress: 100,
+        canRetry: false,
+        canContinue: false,
+        targetVersion
+      });
+      await new Promise(resolve => setTimeout(resolve, 650));
+      updaterLog?.info(`Installing startup update ${targetVersion} silently.`);
+      autoUpdater.quitAndInstall(true, true);
+      return { continueToApp: false, restarting: true, checked: true };
+    } catch (err) {
+      updaterLog?.error('Startup update check failed:', err?.message || err);
+      const timedOut = err?.code === STARTUP_TIMEOUT_CODE;
+      const action = await waitForStartupUpdateDecision(
+        timedOut
+          ? 'The release check is taking longer than expected. Retry or open Alpha without checking.'
+          : 'Alpha couldn’t reach or download its latest release. Check your connection, retry, or open Alpha anyway.',
+        timedOut ? 'Update check timed out' : 'Couldn’t check for updates'
+      );
+      if (action === 'retry') continue;
+      startupUpdateGateActive = false;
+      return { continueToApp: true, checked: false };
+    }
+  }
+}
+
 /**
  * Which version this is, for a UI that wants to say so.
  *
@@ -642,9 +851,13 @@ ipcMain.handle('alpha:select-folder', async event => {
   return result.canceled ? null : result.filePaths[0] ?? null;
 });
 
+/** Settings can check availability on demand; installation remains launch-only. */
 ipcMain.handle('alpha:check-for-updates', async () => {
   if (!app.isPackaged) {
     return { status: 'unsupported', reason: 'Updates apply to the installed app, not one run from source.' };
+  }
+  if (isPortableBuild()) {
+    return { status: 'unsupported', reason: 'Portable Alpha copies need to be downloaded again to update; automatic installation is supported by the installer build.' };
   }
   if (!updater) {
     return { status: 'unsupported', reason: 'Updates need the app to have started its update checks. Restart Alpha.' };
@@ -654,10 +867,13 @@ ipcMain.handle('alpha:check-for-updates', async () => {
   if (!applyGitHubToken(updater)) {
     return { status: 'unsupported', reason: 'Sign in to GitHub in Connected Accounts, so Alpha can read its own releases.' };
   }
+  // Settings is an optional availability check, not a second update flow.
+  // Leave downloading and installation to the next launch's visible gate.
+  updater.autoDownload = false;
   try {
     const result = await updater.checkForUpdates();
     return result?.isUpdateAvailable
-      ? { status: 'downloading', version: result.updateInfo.version }
+      ? { status: 'available', version: result.updateInfo?.version }
       : { status: 'current', version: app.getVersion() };
   } catch (err) {
     return { status: 'error', message: err?.message ? String(err.message) : String(err) };
@@ -689,7 +905,7 @@ function createWindow() {
     // Windows takes the taskbar icon from the packaged .exe, so this matters
     // when running from source -- without it a developer's window is the
     // default Electron circle while everyone else's is the product.
-    icon: path.join(__dirname, 'assets', 'icon.ico'),
+    icon: path.join(__dirname, 'assets', 'alpha-mark.png'),
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       // The engine gets an OS-assigned port at launch. Pass that address to the
@@ -714,14 +930,37 @@ function createWindow() {
   // adopting the web page's longer <title>.
   mainWindow.on('page-title-updated', event => event.preventDefault());
 
-  mainWindow.once('ready-to-show', () => {
+  let mainWindowRevealed = false;
+  let mainWindowRevealTimer = null;
+  const revealMainWindow = () => {
+    if (mainWindowRevealed || !mainWindow || mainWindow.isDestroyed()) return;
+    mainWindowRevealed = true;
+    if (mainWindowRevealTimer) clearTimeout(mainWindowRevealTimer);
     mainWindow.show();
+    // The updater window is a non-closable, frameless splash. Destroy it
+    // explicitly so it cannot remain above Alpha after the workspace appears.
+    destroyStartupUpdateWindow();
     if (process.platform === 'win32' && !useSoftwareCompositing && readGpuState().mode !== 'software') {
       writeGpuState({ mode: 'hardware', launching: false });
     }
     if (focusWhenReady) {
       focusWhenReady = false;
       mainWindow.focus();
+    }
+  };
+
+  // A heavy renderer can delay Electron's first-paint ready-to-show event. Once
+  // the document has loaded, show the workspace and retire the update splash;
+  // ready-to-show remains the preferred earlier handoff when it fires first.
+  mainWindow.once('ready-to-show', revealMainWindow);
+  mainWindow.webContents.once('did-finish-load', revealMainWindow);
+  mainWindowRevealTimer = setTimeout(() => {
+    updaterLog?.warn('Workspace handoff timed out; showing Alpha and closing the startup updater.');
+    revealMainWindow();
+  }, MAIN_WINDOW_HANDOFF_TIMEOUT_MS);
+  mainWindow.webContents.on('did-fail-load', (_event, errorCode, errorDescription, _validatedURL, isMainFrame) => {
+    if (isMainFrame) {
+      console.error(`Alpha workspace failed to load (${errorCode}): ${errorDescription}`);
     }
   });
 
@@ -764,7 +1003,12 @@ function createWindow() {
   });
 
   mainWindow.loadFile(path.join(__dirname, 'build', 'renderer', 'index.html'));
-  mainWindow.on('closed', () => { mainWindow = null; });
+  mainWindow.on('closed', () => {
+    if (mainWindowRevealTimer) clearTimeout(mainWindowRevealTimer);
+    mainWindow = null;
+    // Never leave a stale startup updater behind if Alpha closes during handoff.
+    destroyStartupUpdateWindow();
+  });
 }
 
 if (gotSingleInstanceLock) {
@@ -774,14 +1018,29 @@ if (gotSingleInstanceLock) {
       // is a focused workspace app, so remove that Windows menu before creating
       // the first window instead of leaving an empty native chrome strip.
       Menu.setApplicationMenu(null);
+      if (app.isPackaged && !isPortableBuild()) {
+        setStartupUpdateState({
+          phase: 'starting',
+          title: 'Preparing Alpha',
+          message: 'Starting local services before checking for updates.',
+          progress: 0,
+          canRetry: false,
+          canContinue: false
+        });
+        createStartupUpdateWindow();
+      }
       appearance = createAppearance({
         buildDir: path.join(__dirname, 'build'),
         userDataDir: app.getPath('userData')
       });
       await startBackend();
       await waitForBackend();
+
+      const updateGate = await runStartupUpdateGate();
+      if (!updateGate.continueToApp) return;
     } catch (err) {
       // Surface the reason instead of opening a window onto nothing.
+      destroyStartupUpdateWindow();
       dialog.showErrorBox(
         'Alpha could not start',
         `Alpha startup failed.\n\n${err && err.message ? err.message : String(err)}`
@@ -792,8 +1051,8 @@ if (gotSingleInstanceLock) {
 
     createWindow();
 
-    // After the window exists, so an update dialog has a parent to attach to.
-    startUpdateChecks(mainWindow);
+    // The startup gate is the automatic update check. Settings can perform an
+    // optional availability check, but there are no scheduled background checks.
 
     app.on('activate', () => {
       if (BrowserWindow.getAllWindows().length === 0) createWindow();
