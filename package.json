@@ -1,6 +1,6 @@
 {
   "name": "alpha-desktop",
-  "version": "2.2.1",
+  "version": "2.2.2",
   "description": "Alpha — AI work, orchestrated. Desktop application.",
   "main": "main.js",
   "author": "Alpha",
@@ -91,6 +91,7 @@
     "nsis": {
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,
+      "include": "scripts/installer.nsh",
       "createDesktopShortcut": true,
       "shortcutName": "Alpha",
       "artifactName": "Alpha-Setup-${version}.${ext}"
