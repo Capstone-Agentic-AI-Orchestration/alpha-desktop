@@ -1,0 +1,266 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>Alpha</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      font-family: "Segoe UI Variable", "Segoe UI", sans-serif;
+      font-synthesis: none;
+      text-rendering: optimizeLegibility;
+      -webkit-font-smoothing: antialiased;
+      --ink: #f7f6fb;
+      --muted: #a5a7b5;
+      --soft: #777b8b;
+      --accent: #a78bfa;
+      --line: rgba(202, 195, 226, .12);
+    }
+
+    * { box-sizing: border-box; }
+
+    html, body {
+      width: 100%;
+      height: 100%;
+      margin: 0;
+      overflow: hidden;
+      background: transparent;
+    }
+
+    body {
+      padding: 1px;
+      color: var(--ink);
+    }
+
+    .window {
+      position: relative;
+      display: flex;
+      width: 100%;
+      height: 100%;
+      flex-direction: column;
+      overflow: hidden;
+      border: 1px solid var(--line);
+      border-radius: 17px;
+      background:
+        radial-gradient(ellipse at 50% 30%, rgba(112, 82, 190, .17), transparent 43%),
+        linear-gradient(155deg, #171923 0%, #11131b 62%, #11141c 100%);
+      box-shadow: 0 22px 70px rgba(0, 0, 0, .48), inset 0 1px 0 rgba(255, 255, 255, .025);
+      -webkit-app-region: drag;
+    }
+
+    .topbar, .content, .footer, button { -webkit-app-region: no-drag; }
+
+    .topbar {
+      display: flex;
+      height: 50px;
+      flex: 0 0 50px;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 13px 0 21px;
+      color: #d9d7e3;
+      font-size: 10px;
+      font-weight: 650;
+      letter-spacing: .2em;
+    }
+
+    .quit {
+      display: grid;
+      width: 28px;
+      height: 28px;
+      place-items: center;
+      padding: 0;
+      border: 0;
+      border-radius: 8px;
+      background: transparent;
+      color: #8f91a0;
+      cursor: pointer;
+      font: inherit;
+      font-size: 19px;
+      letter-spacing: 0;
+      transition: color .16s ease, background .16s ease;
+    }
+
+    .quit:hover { background: rgba(255, 255, 255, .08); color: var(--ink); }
+    .quit:disabled { cursor: wait; opacity: .65; }
+    .quit:focus-visible, .button:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+
+    .content {
+      display: flex;
+      min-height: 0;
+      flex: 1;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 2px 38px 4px;
+      text-align: center;
+    }
+
+    .loader {
+      width: 79px;
+      height: 88px;
+      margin: -4px 0 18px;
+      object-fit: contain;
+      filter: drop-shadow(0 5px 24px rgba(167, 139, 250, .2));
+    }
+
+    h1 {
+      margin: 0;
+      color: var(--ink);
+      font-size: 17px;
+      font-weight: 620;
+      letter-spacing: -.025em;
+    }
+
+    .message {
+      max-width: 320px;
+      min-height: 36px;
+      margin: 8px 0 0;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.55;
+    }
+
+    .progress {
+      width: 100%;
+      height: 3px;
+      margin: 23px 0 0;
+      overflow: hidden;
+      border-radius: 999px;
+      background: rgba(255, 255, 255, .09);
+    }
+
+    .progress-fill {
+      width: 28%;
+      height: 100%;
+      border-radius: inherit;
+      background: linear-gradient(90deg, #7860d2, #c2a8ff);
+      box-shadow: 0 0 12px rgba(167, 139, 250, .48);
+      transition: width .3s ease;
+    }
+
+    .progress.is-indeterminate .progress-fill { animation: sweep 1.25s ease-in-out infinite; }
+
+    .actions {
+      display: flex;
+      width: 100%;
+      gap: 10px;
+      margin-top: 17px;
+    }
+
+    .button {
+      min-height: 36px;
+      flex: 1;
+      padding: 0 12px;
+      border: 1px solid rgba(255, 255, 255, .12);
+      border-radius: 9px;
+      background: rgba(255, 255, 255, .045);
+      color: #d9d7e3;
+      cursor: pointer;
+      font: inherit;
+      font-size: 11px;
+      font-weight: 580;
+      transition: background .16s ease, border-color .16s ease, transform .16s ease;
+    }
+
+    .button:hover { background: rgba(255, 255, 255, .085); border-color: rgba(255, 255, 255, .2); }
+    .button:active { transform: translateY(1px); }
+
+    .button.primary {
+      border-color: rgba(167, 139, 250, .35);
+      background: linear-gradient(135deg, #7656d4, #6848bf);
+      color: white;
+      box-shadow: 0 5px 16px rgba(89, 62, 163, .2);
+    }
+
+    .button.primary:hover { background: linear-gradient(135deg, #8567e0, #7556cc); }
+    [hidden] { display: none !important; }
+
+    .footer {
+      display: flex;
+      height: 42px;
+      flex: 0 0 42px;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 21px;
+      border-top: 1px solid rgba(255, 255, 255, .055);
+      color: var(--soft);
+      font-size: 9px;
+      font-weight: 600;
+      letter-spacing: .08em;
+    }
+
+    @keyframes sweep {
+      from { transform: translateX(-120%); }
+      to { transform: translateX(380%); }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; }
+      .progress.is-indeterminate .progress-fill { width: 100%; transform: none; }
+    }
+  </style>
+</head>
+<body>
+  <section class="window" aria-label="Alpha startup updater">
+    <header class="topbar">
+      <span>ALPHA</span>
+      <button class="quit" type="button" aria-label="Quit Alpha" title="Quit Alpha">×</button>
+    </header>
+    <main class="content">
+      <img class="loader" src="./build/renderer/alpha-loading.svg" alt="" aria-hidden="true">
+      <h1 id="title" role="status" aria-live="polite">Preparing Alpha</h1>
+      <p class="message" id="message">Starting local services before checking for updates.</p>
+      <div class="progress is-indeterminate" id="progress" aria-label="Update progress">
+        <div class="progress-fill" id="progressFill"></div>
+      </div>
+      <div class="actions" id="actions" hidden>
+        <button class="button" id="retry" type="button">Try again</button>
+        <button class="button primary" id="continue" type="button">Open Alpha anyway</button>
+      </div>
+    </main>
+    <footer class="footer">
+      <span>DESKTOP WORKSPACE</span>
+      <span id="version">v—</span>
+    </footer>
+  </section>
+  <script>
+    const title = document.getElementById('title');
+    const message = document.getElementById('message');
+    const progress = document.getElementById('progress');
+    const progressFill = document.getElementById('progressFill');
+    const actions = document.getElementById('actions');
+    const version = document.getElementById('version');
+    const quitButton = document.querySelector('.quit');
+
+    function renderState(state) {
+      if (!state || typeof state !== 'object') return;
+      title.textContent = typeof state.title === 'string' ? state.title : 'Preparing Alpha';
+      message.textContent = typeof state.message === 'string' ? state.message : '';
+      version.textContent = typeof state.version === 'string' ? `v${state.version}` : 'v—';
+      actions.hidden = state.phase !== 'error';
+      progress.hidden = state.phase === 'error' || state.phase === 'current';
+      progress.classList.toggle('is-indeterminate', state.phase !== 'downloading');
+      const percent = Number.isFinite(state.progress) ? Math.max(0, Math.min(100, state.progress)) : 0;
+      progressFill.style.width = state.phase === 'downloading' ? `${percent}%` : '28%';
+      document.getElementById('retry').hidden = state.canRetry === false;
+      document.getElementById('continue').hidden = state.canContinue === false;
+    }
+
+    window.alphaStartupUpdate.onStateChanged(renderState);
+    quitButton.addEventListener('click', async () => {
+      quitButton.disabled = true;
+      try {
+        const accepted = await window.alphaStartupUpdate.action('quit');
+        if (!accepted) throw new Error('Quit request was rejected.');
+      } catch {
+        quitButton.disabled = false;
+        message.textContent = 'Alpha could not close. Try again.';
+      }
+    });
+    document.getElementById('retry').addEventListener('click', () => window.alphaStartupUpdate.action('retry'));
+    document.getElementById('continue').addEventListener('click', () => window.alphaStartupUpdate.action('continue'));
+  </script>
+</body>
+</html>
