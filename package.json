@@ -20,6 +20,7 @@
     "electron-builder": "^25.1.8"
   },
   "dependencies": {
+    "@babel/parser": "^7.29.15",
     "@supabase/supabase-js": "^2.112.3",
     "better-sqlite3": "^12.11.1",
     "cors": "^2.8.5",
