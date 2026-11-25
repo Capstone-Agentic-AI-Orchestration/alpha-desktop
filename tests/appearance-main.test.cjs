@@ -32,6 +32,8 @@ async function boot(f) {
       window.setMenuBarVisibility = () => {};
       window.webContents.setWindowOpenHandler = () => {};
       window.loadFile = file => { window.loaded = file; };
+      window.show = () => { window.shown = true; };
+      window.focus = () => {};
       windows.push(window);
       return window;
     }
@@ -70,6 +72,10 @@ async function boot(f) {
     }
   });
   await startup;
+  // Finish loading the page, as the renderer would. main.js shows the window
+  // then and cancels its 5-second fallback timer, which would otherwise fire
+  // after the test has ended.
+  for (const window of windows) window.webContents.emit('did-finish-load');
   return { handlers, listeners, windows, errors, backendStarts, quits };
 }
 
@@ -86,6 +92,7 @@ test('actual main startup wires persisted colors and matching preload argument b
   assert.equal(window.options.titleBarOverlay.symbolColor, '#18181B');
   assert.equal(window.options.webPreferences.additionalArguments.at(-1), '--alpha-theme=alpha-light');
   assert.equal(window.loaded, path.join(f.renderer, 'index.html'));
+  assert.equal(window.shown, true);
   assert.equal(window.options.webPreferences.contextIsolation, true);
   assert.equal(window.options.webPreferences.nodeIntegration, false);
   const setTheme = result.handlers.get(SET_THEME_CHANNEL);
